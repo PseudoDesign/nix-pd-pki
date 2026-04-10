@@ -160,13 +160,162 @@ Outputs:
 
 ### Intermediate Signing Authority
 
-Signing authority delegated by the root certificate authority.
+Delegated certificate authority signed by the root certificate authority. This role performs the higher-frequency issuance work for OpenVPN server and client leaf certificates, manages leaf revocation status, and publishes intermediate trust artifacts so the root CA can stay reserved for infrequent high-trust operations. The intermediate signing key is intended to live in a dedicated signing environment or hardware-backed device appropriate for operational issuance.
 
-TODO:
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Operator
+  participant Workflow as Intermediate CA Workflow
+  participant Root as Root CA Workflow
+  participant Signer as Intermediate Signing Environment
+  participant Server as OpenVPN Server Requester
+  participant Client as OpenVPN Client Requester
+  participant Publish as Trust Artifact Publication
 
-- Define signing policy
-- Define issuance inputs and outputs
-- Define relationship to the root CA package
+  Note over Operator,Publish: 1. Create Intermediate CA
+  Operator->>Workflow: Provide subject, policy, validity, signer parameters, and root approval context
+  Workflow->>Signer: Generate or import intermediate signing key
+  Signer-->>Workflow: Return public key and signer metadata
+  Workflow->>Root: Submit intermediate CSR for approval and root signature
+  Root-->>Workflow: Return signed intermediate CA certificate
+  Workflow-->>Operator: Intermediate certificate, chain, and audit metadata
+
+  Note over Operator,Publish: 2. Rotate Intermediate CA
+  Operator->>Workflow: Approve rotation and replacement signer parameters
+  Workflow->>Signer: Provision replacement intermediate key
+  Signer-->>Workflow: Return replacement public key and signer metadata
+  Workflow->>Root: Submit replacement intermediate CSR for root signature
+  Root-->>Workflow: Return replacement intermediate CA certificate
+  Workflow-->>Operator: Rotation record and updated chain metadata
+
+  Note over Operator,Publish: 3. Sign OpenVPN Server Leaf Certificate
+  Server->>Workflow: Submit approved server CSR and requested SANs
+  Operator->>Workflow: Provide server issuance policy
+  Workflow->>Signer: Sign OpenVPN server certificate
+  Signer-->>Workflow: Return signed server certificate
+  Workflow-->>Server: Deliver server certificate and chain
+  Workflow-->>Operator: Record server signing audit event
+
+  Note over Operator,Publish: 4. Sign OpenVPN Client Leaf Certificate
+  Client->>Workflow: Submit approved client CSR and identity metadata
+  Operator->>Workflow: Provide client issuance policy
+  Workflow->>Signer: Sign OpenVPN client certificate
+  Signer-->>Workflow: Return signed client certificate
+  Workflow-->>Client: Deliver client certificate and chain
+  Workflow-->>Operator: Record client signing audit event
+
+  Note over Operator,Publish: 5. Revoke Leaf Certificate
+  Operator->>Workflow: Submit leaf certificate ID, reason, and effective time
+  Workflow->>Signer: Sign updated revocation artifact
+  Signer-->>Workflow: Return signed CRL or equivalent
+  Workflow-->>Operator: Record revocation audit event
+
+  Note over Operator,Publish: 6. Publish Intermediate Trust Artifacts
+  Operator->>Workflow: Approve publication set
+  Workflow->>Publish: Publish intermediate certificate, chain, revocation artifacts, and issuance metadata
+  Publish-->>Operator: Confirm published trust bundle and status
+```
+
+#### 1. Create Intermediate CA
+
+Inputs:
+
+- Intermediate subject metadata
+- Intermediate certificate profile and policy constraints
+- Validity period, serial number policy, and path length constraints
+- Signing environment parameters such as key algorithm, storage backend, hardware token, or service configuration
+- Access to the root CA workflow needed to sign the intermediate CSR
+
+Outputs:
+
+- Intermediate private key material generated in the designated signing environment
+- Root-signed intermediate CA certificate
+- Certificate chain linking the intermediate to the root CA
+- Signing environment metadata needed for audit, operations, and recovery planning
+
+#### 2. Rotate Intermediate CA
+
+Inputs:
+
+- Existing intermediate CA metadata
+- New intermediate subject metadata, if changed
+- New intermediate certificate profile and policy constraints, if changed
+- New signing environment parameters
+- Access to the root CA workflow to sign the replacement intermediate CSR
+
+Outputs:
+
+- Replacement intermediate private key material in the signing environment
+- Replacement root-signed intermediate CA certificate
+- Updated certificate chain and metadata for downstream trust distribution
+- Retirement record for the previous intermediate key and certificate, if applicable
+
+#### 3. Sign OpenVPN Server Leaf Certificate
+
+Inputs:
+
+- Approved OpenVPN server certificate signing request
+- Requested server subject alternative names and endpoint metadata
+- Server issuance policy and key usage constraints
+- Access to the intermediate signing environment
+- Requested validity period and serial number allocation
+
+Outputs:
+
+- Signed OpenVPN server leaf certificate
+- Issuance metadata such as serial number, validity window, and policy identifiers
+- Certificate chain for server deployment
+- Audit record of the signing event
+
+#### 4. Sign OpenVPN Client Leaf Certificate
+
+Inputs:
+
+- Approved OpenVPN client certificate signing request
+- Client identity metadata and subject naming inputs
+- Client issuance policy and key usage constraints
+- Access to the intermediate signing environment
+- Requested validity period and serial number allocation
+
+Outputs:
+
+- Signed OpenVPN client leaf certificate
+- Issuance metadata such as serial number, validity window, and policy identifiers
+- Certificate chain for client distribution
+- Audit record of the signing event
+
+#### 5. Revoke Leaf Certificate
+
+Inputs:
+
+- Identifier for the leaf certificate to revoke
+- Revocation reason and effective time
+- Access to the intermediate signing environment
+- Current revocation state needed to produce updated status artifacts
+
+Outputs:
+
+- Updated revocation artifact such as a CRL
+- Revocation record for audit purposes
+- Updated public status for downstream consumers
+- Distribution-ready revocation metadata for OpenVPN roles
+
+#### 6. Publish Intermediate Trust Artifacts
+
+Inputs:
+
+- Current intermediate CA certificate and root chain
+- Current issued leaf certificate metadata or distribution manifests
+- Current revocation artifacts
+- Public metadata describing the active intermediate signing configuration
+
+Outputs:
+
+- Trust bundle or distribution directory for OpenVPN server and client roles
+- Published intermediate and chain certificates
+- Published revocation artifacts and supporting metadata
+- Published issuance metadata sufficient for downstream consumers to select the active intermediate
 
 ### OpenVPN Server Leaf
 

@@ -70,6 +70,7 @@ let
       pkgs.gnugrep
       pkgs.jq
       pkgs.nix
+      pkgs.pandoc
     ];
     text = ''
       set -euo pipefail
@@ -141,6 +142,9 @@ let
       results_file="$report_dir/check-results.json"
       report_json="$report_dir/report.json"
       report_md="$report_dir/report.md"
+      report_site_md="$report_dir/site.md"
+      report_html="$report_dir/index.html"
+      report_css="$report_dir/style.css"
 
       mkdir -p "$logs_dir"
       printf '[]\n' > "$results_file"
@@ -159,6 +163,7 @@ let
       fi
 
       while IFS="$(printf '\t')" read -r check_name check_title check_description; do
+        log_path="logs/$check_name.log"
         log_file="$logs_dir/$check_name.log"
         build_target="$flake_ref#checks.$system.$check_name"
         build_output_file="$(mktemp "$report_dir/$check_name.output.XXXXXX")"
@@ -259,6 +264,7 @@ let
           --arg startedAtUtc "$started_at_utc" \
           --arg finishedAtUtc "$finished_at_utc" \
           --arg durationDisplay "$duration_display" \
+          --arg logPath "$log_path" \
           --arg logFile "$log_file" \
           --arg storePath "$store_path" \
           --arg failureMessage "$failed_message" \
@@ -276,6 +282,7 @@ let
             durationSeconds: $durationSeconds,
             startedAtUtc: $startedAtUtc,
             finishedAtUtc: $finishedAtUtc,
+            logPath: $logPath,
             logFile: $logFile,
             storePath: $storePath,
             failureMessage: $failureMessage
@@ -317,13 +324,167 @@ let
         printf -- "- Failed: \`%s\`\n\n" "$failed_checks"
         printf '| Check | Title | Status | Exit Code | Duration | Log |\n'
         printf '| --- | --- | --- | ---: | --- | --- |\n'
-        jq -r '.checks[] | "| `\(.name)` | \(.title) | \(.status) | \(.exitCode) | \(.durationDisplay) | `\(.logFile)` |"' "$report_json"
+        jq -r '.checks[] | "| `\(.name)` | \(.title) | \(.status) | \(.exitCode) | \(.durationDisplay) | `\(.logPath)` |"' "$report_json"
         printf '\n## Check Descriptions\n\n'
-        jq -r '.checks[] | "### \(.title)\n\n- Check ID: `\(.name)`\n- Description: \(.description)\n- Status: \(.status)\n- Log: `\(.logFile)`\n"' "$report_json"
+        jq -r '.checks[] | "### \(.title)\n\n- Check ID: `\(.name)`\n- Description: \(.description)\n- Status: \(.status)\n- Log: `\(.logPath)`\n"' "$report_json"
       } > "$report_md"
+
+      {
+        printf '# pd-pki Test Report\n\n'
+        printf -- "- Generated at (UTC): \`%s\`\n" "$generated_at_utc"
+        printf -- "- Flake: \`%s\`\n" "$flake_ref"
+        printf -- "- System: \`%s\`\n" "$system"
+        printf -- "- Total checks: \`%s\`\n" "$total_checks"
+        printf -- "- Passed: \`%s\`\n" "$passed_checks"
+        printf -- "- Failed: \`%s\`\n\n" "$failed_checks"
+        printf '## Report Files\n\n'
+        printf -- "- [HTML report](index.html)\n"
+        printf -- "- [Markdown report](report.md)\n"
+        printf -- "- [JSON report](report.json)\n\n"
+        printf '| Check | Title | Status | Exit Code | Duration | Log |\n'
+        printf '| --- | --- | --- | ---: | --- | --- |\n'
+        jq -r '.checks[] | "| `\(.name)` | \(.title) | \(.status) | \(.exitCode) | \(.durationDisplay) | [view log](\(.logPath)) |"' "$report_json"
+        printf '\n## Check Descriptions\n\n'
+        jq -r '.checks[] | "### \(.title)\n\n- Check ID: `\(.name)`\n- Description: \(.description)\n- Status: \(.status)\n- Log: [\(.logPath)](\(.logPath))\n"' "$report_json"
+      } > "$report_site_md"
+
+      cat > "$report_css" <<'EOF'
+:root {
+  --background: #f3efe5;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: #fffdf8;
+  --border: #d8d3c5;
+  --text: #1d2733;
+  --muted: #53606c;
+  --accent: #0b6e69;
+  --accent-soft: #d9f0ed;
+  --pass: #1f7a3d;
+  --fail: #b42318;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(11, 110, 105, 0.12), transparent 28rem),
+    linear-gradient(180deg, #f7f3ea 0%, #edf3f5 100%);
+}
+
+body {
+  margin: 0 auto;
+  max-width: 72rem;
+  padding: 2.5rem 1.25rem 4rem;
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  line-height: 1.6;
+}
+
+body > * {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 1rem 2.5rem rgba(29, 39, 51, 0.08);
+  margin: 0 0 1.25rem;
+  padding: 1.25rem 1.5rem;
+}
+
+h1,
+h2,
+h3 {
+  color: #13202b;
+  line-height: 1.2;
+}
+
+h1 {
+  background:
+    linear-gradient(135deg, rgba(11, 110, 105, 0.12), rgba(255, 255, 255, 0)) var(--surface-strong);
+  font-size: 2.1rem;
+  letter-spacing: -0.03em;
+}
+
+a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.14em;
+}
+
+table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: rgba(11, 110, 105, 0.08);
+}
+
+code {
+  background: rgba(19, 32, 43, 0.08);
+  border-radius: 0.35rem;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  padding: 0.08rem 0.35rem;
+}
+
+pre {
+  background: #13202b;
+  border-radius: 0.85rem;
+  color: #f7f9fb;
+  overflow-x: auto;
+  padding: 1rem;
+}
+
+blockquote {
+  background: var(--accent-soft);
+  border-left: 0.35rem solid var(--accent);
+  color: var(--muted);
+  margin: 0;
+}
+
+li > p:last-child {
+  margin-bottom: 0;
+}
+
+strong {
+  color: #13202b;
+}
+
+@media (max-width: 640px) {
+  body {
+    padding: 1rem 0.75rem 2rem;
+  }
+
+  body > * {
+    padding: 1rem;
+  }
+
+  h1 {
+    font-size: 1.7rem;
+  }
+}
+EOF
+
+      pandoc \
+        --from gfm \
+        --to html5 \
+        --standalone \
+        --metadata title='pd-pki Test Report' \
+        --css style.css \
+        --output "$report_html" \
+        "$report_site_md"
+
+      touch "$report_dir/.nojekyll"
 
       printf '%s\n' "Markdown report: $report_md"
       printf '%s\n' "JSON report: $report_json"
+      printf '%s\n' "HTML report: $report_html"
 
       if [ "$failed_checks" -gt 0 ]; then
         printf '%s\n' "One or more checks failed. See the report and per-check logs in $report_dir" >&2

@@ -248,7 +248,11 @@ nix run .#test-report -- --verbose
 
 - `report.md`
 - `report.json`
+- `index.html`
+- `style.css`
 - `logs/<check-name>.log`
+
+On pushes to the repository default branch, the GitHub Actions workflow publishes the latest generated report directory to GitHub Pages so the HTML report can be viewed directly in a browser.
 
 ## Repository Layout
 

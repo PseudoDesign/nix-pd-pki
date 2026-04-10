@@ -31,20 +31,37 @@ jobs:
           mkdir -p "$REPORT_ROOT"
           nix run .#test-report -- --out-dir "$REPORT_ROOT" --verbose
 
+      - name: Locate latest report directory
+        if: ${{ always() }}
+        id: latest_report
+        run: |
+          report_dir=""
+          report_md=""
+
+          if [ -d "$REPORT_ROOT" ]; then
+            report_dir="$(find "$REPORT_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'test-report-*' | sort | tail -n 1)"
+          fi
+
+          if [ -n "$report_dir" ] && [ -f "$report_dir/report.md" ]; then
+            report_md="$report_dir/report.md"
+          fi
+
+          printf 'report_dir=%s\n' "$report_dir" >> "$GITHUB_OUTPUT"
+          printf 'report_md=%s\n' "$report_md" >> "$GITHUB_OUTPUT"
+
       - name: Add test report to workflow summary
         if: ${{ always() }}
+        env:
+          REPORT_MD: ${{ steps.latest_report.outputs.report_md }}
         run: |
-          report_md=""
-          if [ -d "$REPORT_ROOT" ]; then
-            report_md="$(find "$REPORT_ROOT" -type f -name report.md | sort | tail -n 1)"
-          fi
+          report_md="$REPORT_MD"
 
           if [ -n "$report_md" ]; then
             cat "$report_md" >> "$GITHUB_STEP_SUMMARY"
           else
             {
-              printf '# pd-pki Test Report\n\n'
-              printf 'No `report.md` file was generated. Review the job logs for details.\n'
+              printf "# pd-pki Test Report\n\n"
+              printf "No \`report.md\` file was generated. Review the job logs for details.\n"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -56,3 +73,29 @@ jobs:
           path: ${{ env.REPORT_ROOT }}/
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Configure GitHub Pages
+        if: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.latest_report.outputs.report_dir != '' }}
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        if: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.latest_report.outputs.report_dir != '' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.latest_report.outputs.report_dir }}
+
+  deploy-pages:
+    name: Deploy Test Report Site
+    if: ${{ github.event_name == 'push' && github.ref_name == github.event.repository.default_branch }}
+    needs: test-report
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages site
+        id: deployment
+        uses: actions/deploy-pages@v4

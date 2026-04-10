@@ -55,6 +55,12 @@ let
       '';
     }
     {
+      name = "openvpn-mutual-auth";
+      value = import ./openvpn-mutual-auth.nix {
+        inherit pkgs packages;
+      };
+    }
+    {
       name = "pd-pki";
       value = pkgs.runCommand "pd-pki-check" { } ''
         set -euo pipefail

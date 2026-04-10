@@ -11,6 +11,11 @@ let
       description = "Confirm the top-level PKI definitions serialize to valid JSON.";
     }
     {
+      name = "openvpn-mutual-auth";
+      title = "Validate OpenVPN Mutual Auth";
+      description = "Boot an OpenVPN server and client with the generated PKI artifacts and prove mutual TLS authentication succeeds.";
+    }
+    {
       name = "pd-pki";
       title = "Validate Aggregate Package";
       description = "Confirm the aggregate pd-pki package exposes the expected role packages.";

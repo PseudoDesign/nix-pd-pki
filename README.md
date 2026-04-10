@@ -30,13 +30,88 @@ Still to define:
 
 ### Root Certificate Authority
 
-Top-level certificate authority for the PKI hierarchy.
+Top-level certificate authority for the PKI hierarchy. This role performs a small set of high-trust operations and should not issue OpenVPN server or client leaf certificates directly. The root signing key is intended to live on a dedicated YubiKey so root signing is hardware-backed and the private key remains non-exportable.
 
-TODO:
+#### 1. Create Root CA
 
-- Define root CA inputs
-- Define root CA outputs
-- Define lifecycle and storage expectations
+Inputs:
+
+- Root subject metadata
+- Root certificate profile and policy constraints
+- Validity period and serial number policy
+- YubiKey provisioning parameters such as key algorithm, resident slot or application, and touch policy
+- A dedicated YubiKey designated for root CA use
+
+Outputs:
+
+- Non-exportable root private key material generated on or imported into the YubiKey
+- Self-signed root CA certificate
+- YubiKey device metadata needed for audit and recovery planning
+- Public metadata such as fingerprint, serial number, and validity window
+
+#### 2. Rotate Root CA
+
+Inputs:
+
+- Existing root CA metadata
+- New root subject metadata, if changed
+- New root certificate profile and policy constraints, if changed
+- New YubiKey provisioning parameters
+- Replacement YubiKey, if rotation moves the root to new hardware
+
+Outputs:
+
+- Replacement non-exportable root private key material on the YubiKey
+- Replacement self-signed root CA certificate
+- Updated YubiKey device metadata for trust distribution and audit records
+- Retirement record for the previous root device and certificate, if applicable
+
+#### 3. Sign Intermediate CA Certificate
+
+Inputs:
+
+- Approved intermediate CA certificate signing request
+- Issuance policy for the intermediate CA
+- Access to the root YubiKey
+- Operator authentication material required to use the YubiKey
+- Intermediate validity period and path length constraints
+
+Outputs:
+
+- Signed intermediate CA certificate
+- Issuance metadata such as serial number, validity window, and policy identifiers
+- Audit record of the signing event, including which YubiKey was used
+
+#### 4. Revoke Intermediate CA Certificate
+
+Inputs:
+
+- Identifier for the intermediate CA certificate to revoke
+- Revocation reason and effective time
+- Access to the root YubiKey
+- Operator authentication material required to use the YubiKey
+
+Outputs:
+
+- Updated revocation artifact such as a CRL
+- Revocation record for audit purposes, including which YubiKey was used
+- Updated public status for downstream consumers
+
+#### 5. Publish Root Trust Artifacts
+
+Inputs:
+
+- Current root CA certificate
+- Current signed intermediate CA certificates
+- Current revocation artifacts
+- Public metadata describing the active root YubiKey and signing configuration
+
+Outputs:
+
+- Trust bundle or distribution directory for downstream roles and clients
+- Published root and intermediate public certificates
+- Published revocation artifacts and supporting metadata
+- Published root metadata sufficient to identify the active signing device without exposing secrets
 
 ### Intermediate Signing Authority
 

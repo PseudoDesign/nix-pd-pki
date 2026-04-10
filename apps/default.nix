@@ -17,8 +17,13 @@ let
     text = ''
       set -euo pipefail
 
+      usage() {
+        printf '%s\n' "Usage: test-report [--out-dir PATH] [--flake PATH] [--verbose|--debug]" >&2
+      }
+
       out_root="$PWD/reports"
       flake_ref="$(pwd -P)"
+      verbose=0
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -30,9 +35,17 @@ let
             flake_ref="$2"
             shift 2
             ;;
+          --verbose|--debug)
+            verbose=1
+            shift
+            ;;
+          -h|--help)
+            usage
+            exit 0
+            ;;
           *)
             printf '%s\n' "Unknown argument: $1" >&2
-            printf '%s\n' "Usage: test-report [--out-dir PATH] [--flake PATH]" >&2
+            usage
             exit 2
             ;;
         esac
@@ -67,6 +80,9 @@ let
 
       printf '%s\n' "Writing test report to $report_dir"
       printf '%s\n' "Running $total_checks checks for system $system"
+      if [ "$verbose" -eq 1 ]; then
+        printf '%s\n' "Verbose output enabled; streaming build, package, and test status logs"
+      fi
 
       while IFS= read -r check_name; do
         log_file="$logs_dir/$check_name.log"
@@ -74,16 +90,27 @@ let
         start_epoch="$(date +%s)"
 
         printf '%s\n' "==> $check_name"
+        if [ "$verbose" -eq 1 ]; then
+          printf '%s\n' "    log: $log_file"
+        fi
 
-        if nix build --no-link --print-build-logs "$flake_ref#checks.$system.$check_name" >"$log_file" 2>&1; then
+        set +e
+        if [ "$verbose" -eq 1 ]; then
+          nix build --no-link --print-build-logs "$flake_ref#checks.$system.$check_name" 2>&1 | tee "$log_file"
+          exit_code=''${PIPESTATUS[0]}
+        else
+          nix build --no-link --print-build-logs "$flake_ref#checks.$system.$check_name" >"$log_file" 2>&1
+          exit_code=$?
+        fi
+        set -e
+
+        if [ "$exit_code" -eq 0 ]; then
           status="passed"
-          exit_code=0
           failed_message=""
           store_path="$(grep -E '^/nix/store/' "$log_file" | tail -n1 || true)"
           passed_checks=$((passed_checks + 1))
           printf '%s\n' "PASS $check_name"
         else
-          exit_code=$?
           status="failed"
           failed_message="$(tail -n1 "$log_file" || true)"
           store_path=""

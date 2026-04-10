@@ -61,11 +61,14 @@ rec {
     in
     pkgs.runCommand role.id { inherit nativeBuildInputs; } ''
       set -euo pipefail
+      export PD_PKI_ROLE_ID='${role.id}'
+      printf '%s\n' "[package/${role.id}] starting role package build"
       mkdir -p "$out/steps"
       cp ${roleDefinition} "$out/role.json"
       cp ${stepsManifest} "$out/steps.json"
       ${stepMetadataCommands}
       source ${./pki-workflow-lib.sh}
       ${buildScript}
+      printf '%s\n' "[package/${role.id}] role package build passed"
     '';
 }

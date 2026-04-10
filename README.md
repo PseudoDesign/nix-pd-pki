@@ -650,6 +650,7 @@ nix build .#openvpn-server-leaf
 nix build .#openvpn-client-leaf
 nix flake check -L --keep-going
 nix run .#test-report
+nix run .#test-report -- --verbose
 ```
 
 TODO:

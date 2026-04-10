@@ -24,6 +24,12 @@ json_string_array() {
 write_status() {
   local step_dir="$1"
   local summary="$2"
+  local role_id="${PD_PKI_ROLE_ID:-package}"
+  local step_id
+
+  step_id="$(basename "$step_dir")"
+
+  printf '%s\n' "[package/${role_id}/${step_id}] ${summary}"
 
   jq -n \
     --arg status "implemented" \

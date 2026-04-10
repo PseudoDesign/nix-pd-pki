@@ -1,22 +1,26 @@
 {
   pkgs,
-  packages,
+  nixosModules,
 }:
 if pkgs.stdenv.hostPlatform.isLinux then
-  let
-    serverBundle = "${packages.openvpn-server-leaf}/steps/package-openvpn-server-deployment-bundle/artifacts/deployment-bundle";
-    clientBundle = "${packages.openvpn-client-leaf}/steps/package-openvpn-client-credential-bundle/artifacts/credential-bundle";
-  in
   pkgs.testers.runNixOSTest {
     name = "openvpn-mutual-auth";
 
     nodes = {
       vpn =
-        { lib, ... }:
+        { config, lib, ... }:
         {
+          imports = [
+            nixosModules.openvpn-server-leaf
+            nixosModules.openvpn-client-leaf
+          ];
+
           networking.hostName = "vpn";
 
           systemd.tmpfiles.rules = [ "d /run/openvpn-mutual-auth 0755 root root -" ];
+
+          services.pd-pki.roles.openvpnServerLeaf.enable = true;
+          services.pd-pki.roles.openvpnClientLeaf.enable = true;
 
           services.openvpn.servers.mutual-auth-server = {
             config = ''
@@ -38,10 +42,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
               data-ciphers AES-256-GCM:AES-128-GCM
               tls-version-min 1.2
               dh none
-              # Reuse the server bundle produced by the PKI workflow under test.
-              ca ${serverBundle}/chain.pem
-              cert ${serverBundle}/server.cert.pem
-              key ${serverBundle}/server.key.pem
+              # Use runtime-managed credentials stored outside the Nix store.
+              ca ${config.services.pd-pki.roles.openvpnServerLeaf.runtimePaths.chain}
+              cert ${config.services.pd-pki.roles.openvpnServerLeaf.runtimePaths.certificate}
+              key ${config.services.pd-pki.roles.openvpnServerLeaf.runtimePaths.key}
               # Record connected client identities so the test can assert mutual auth.
               status /run/openvpn-mutual-auth/status.log
               status-version 2
@@ -63,10 +67,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
               persist-tun
               data-ciphers AES-256-GCM:AES-128-GCM
               tls-version-min 1.2
-              # Reuse the client bundle produced by the PKI workflow under test.
-              ca ${clientBundle}/chain.pem
-              cert ${clientBundle}/client.cert.pem
-              key ${clientBundle}/client.key.pem
+              # Use runtime-managed credentials stored outside the Nix store.
+              ca ${config.services.pd-pki.roles.openvpnClientLeaf.runtimePaths.chain}
+              cert ${config.services.pd-pki.roles.openvpnClientLeaf.runtimePaths.certificate}
+              key ${config.services.pd-pki.roles.openvpnClientLeaf.runtimePaths.key}
               # Require the expected server usage and identity, not just any trusted cert.
               remote-cert-tls server
               verify-x509-name vpn.pseudo.test name
@@ -74,9 +78,20 @@ if pkgs.stdenv.hostPlatform.isLinux then
             '';
           };
 
+          systemd.services."openvpn-mutual-auth-server" = {
+            after = [ "pd-pki-openvpn-server-leaf-init.service" ];
+            requires = [ "pd-pki-openvpn-server-leaf-init.service" ];
+          };
+
           systemd.services."openvpn-mutual-auth-client" = {
-            after = [ "openvpn-mutual-auth-server.service" ];
-            requires = [ "openvpn-mutual-auth-server.service" ];
+            after = [
+              "pd-pki-openvpn-client-leaf-init.service"
+              "openvpn-mutual-auth-server.service"
+            ];
+            requires = [
+              "pd-pki-openvpn-client-leaf-init.service"
+              "openvpn-mutual-auth-server.service"
+            ];
           };
 
           system.stateVersion = lib.mkDefault "24.11";
@@ -88,8 +103,17 @@ if pkgs.stdenv.hostPlatform.isLinux then
       ''
         start_all()
 
+        vpn.wait_for_unit("pd-pki-openvpn-server-leaf-init.service")
+        vpn.wait_for_unit("pd-pki-openvpn-client-leaf-init.service")
         vpn.wait_for_unit("openvpn-mutual-auth-server.service")
         vpn.wait_for_unit("openvpn-mutual-auth-client.service")
+
+        vpn.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/server.key.pem")
+        vpn.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/client.key.pem")
+        vpn.succeed("test \"$(stat -c %a /var/lib/pd-pki/openvpn-server-leaf/server.key.pem)\" = 600")
+        vpn.succeed("test \"$(stat -c %a /var/lib/pd-pki/openvpn-client-leaf/client.key.pem)\" = 600")
+        vpn.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-server-leaf/server.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
+        vpn.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-client-leaf/client.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
 
         vpn.wait_until_succeeds("grep -F 'CLIENT_LIST,client-01.pseudo.test,' /run/openvpn-mutual-auth/status.log")
         vpn.wait_until_succeeds("ip -o -4 addr show dev ovpnsrv | grep -F '10.8.0.1/'")

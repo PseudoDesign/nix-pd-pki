@@ -10,15 +10,24 @@ common.mkRolePackage {
     pkgs.jq
   ];
   buildScript = ''
+    workdir="$(mktemp -d)"
+    trap 'rm -rf "$workdir"' EXIT
+
     create_step="$out/steps/create-root-ca"
     create_artifacts="$create_step/artifacts"
-    generate_self_signed_ca "$create_artifacts" "root-ca" "Pseudo Design Test Root CA" 1001 3650 1
+    create_private="$workdir/create-root-ca"
+    generate_self_signed_ca "$create_private" "root-ca" "Pseudo Design Test Root CA" 1001 3650 1
+    cp "$create_private/root-ca.csr.pem" "$create_artifacts/root-ca.csr.pem"
+    cp "$create_private/root-ca.cert.pem" "$create_artifacts/root-ca.cert.pem"
     write_certificate_metadata "$create_artifacts/root-ca.cert.pem" "$create_artifacts/root-ca.metadata.json" "root-ca"
-    write_status "$create_step" "Generated a dummy self-signed root CA certificate for automated checks."
+    write_status "$create_step" "Generated a dummy self-signed root CA certificate and CSR for automated checks without exporting the signer key."
 
     rotate_step="$out/steps/rotate-root-ca"
     rotate_artifacts="$rotate_step/artifacts"
-    generate_self_signed_ca "$rotate_artifacts" "replacement-root-ca" "Pseudo Design Test Root CA Rotated" 1002 3650 1
+    rotate_private="$workdir/rotate-root-ca"
+    generate_self_signed_ca "$rotate_private" "replacement-root-ca" "Pseudo Design Test Root CA Rotated" 1002 3650 1
+    cp "$rotate_private/replacement-root-ca.csr.pem" "$rotate_artifacts/replacement-root-ca.csr.pem"
+    cp "$rotate_private/replacement-root-ca.cert.pem" "$rotate_artifacts/replacement-root-ca.cert.pem"
     write_certificate_metadata "$rotate_artifacts/replacement-root-ca.cert.pem" "$rotate_artifacts/replacement-root-ca.metadata.json" "root-ca-rotation"
     jq -n \
       --arg retiredSerial "$(certificate_serial "$create_artifacts/root-ca.cert.pem")" \
@@ -32,21 +41,25 @@ common.mkRolePackage {
         replacementFingerprint: $replacementFingerprint,
         reason: "scheduled-rotation"
       }' > "$rotate_artifacts/retirement-record.json"
-    write_status "$rotate_step" "Generated replacement dummy root CA material and a retirement record."
+    write_status "$rotate_step" "Generated replacement dummy root CA public artifacts and a retirement record without exporting the replacement signer key."
 
     sign_step="$out/steps/sign-intermediate-ca-certificate"
     sign_artifacts="$sign_step/artifacts"
+    sign_private="$workdir/sign-intermediate-ca"
     generate_signed_ca \
-      "$sign_artifacts" \
+      "$sign_private" \
       "intermediate-ca" \
       "Pseudo Design Test Intermediate CA" \
       2001 \
       1825 \
       0 \
-      "$create_artifacts/root-ca.key.pem" \
-      "$create_artifacts/root-ca.cert.pem"
+      "$create_private/root-ca.key.pem" \
+      "$create_private/root-ca.cert.pem"
+    cp "$sign_private/intermediate-ca.csr.pem" "$sign_artifacts/intermediate-ca.csr.pem"
+    cp "$sign_private/intermediate-ca.cert.pem" "$sign_artifacts/intermediate-ca.cert.pem"
+    cp "$sign_private/chain.pem" "$sign_artifacts/chain.pem"
     write_certificate_metadata "$sign_artifacts/intermediate-ca.cert.pem" "$sign_artifacts/issuance-metadata.json" "intermediate-ca"
-    write_status "$sign_step" "Signed a representative intermediate CA certificate with the dummy root CA."
+    write_status "$sign_step" "Signed a representative intermediate CA certificate with the dummy root CA while keeping the root signer key outside the store output."
 
     revoke_step="$out/steps/revoke-intermediate-ca-certificate"
     revoke_artifacts="$revoke_step/artifacts"

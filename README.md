@@ -9,8 +9,8 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 4 roles are implemented: root CA, intermediate signing authority, OpenVPN server leaf, and OpenVPN client leaf
 - 19 workflow steps are modeled and exported as buildable flake packages
 - 31 named checks are exported from the flake
-- role packages emit PEM and JSON artifacts plus per-step metadata and status files
-- NixOS modules expose each role under `services.pd-pki.roles.*`
+- role packages emit public PEM and JSON artifacts plus per-step metadata and status files
+- NixOS modules expose each role under `services.pd-pki.roles.*` and stage runtime keys under `/var/lib/pd-pki`
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## What This Repository Is Today
@@ -24,19 +24,21 @@ Each role package produces:
 - `steps/<step-id>/define.json` with the step contract
 - `steps/<step-id>/checks.json` with declared validations
 - `steps/<step-id>/status.json` with the implementation summary
-- `steps/<step-id>/artifacts/...` with representative PEM and JSON outputs
+- `steps/<step-id>/artifacts/...` with representative public PEM and JSON outputs
 
 The aggregate `pd-pki` package is a link farm that exposes the four role packages together.
+
+When a role module is enabled, runtime key material is created on the host under `/var/lib/pd-pki/...` instead of being copied into the package output.
 
 ## What It Is Not Yet
 
 This repo is still test-oriented rather than production-ready PKI automation:
 
-- private keys are generated inside derivations and land in the Nix store
+- private keys used for runtime services are generated in software under `/var/lib/pd-pki`; they are not hardware-backed or escrowed
 - root and intermediate hardware-backed flows are simulated, not integrated with YubiKey or HSM hardware
 - revocation is represented as JSON metadata, not CRLs or OCSP
 - issuance inputs are fixed representative values baked into the derivations today
-- there is no secret-management boundary between build-time material and deploy-time material yet
+- runtime certificate authorities are host-local fixtures rather than an offline or HSM-backed production signing workflow
 
 ## Implemented Roles
 
@@ -74,7 +76,7 @@ Implements 4 steps:
 - `rotate-openvpn-server-certificate`
 - `consume-server-trust-updates`
 
-This package generates a representative server key and CSR, signs and packages a deployment bundle, creates a rotated server certificate, and stages trust updates for server-side validation.
+This package generates a representative server CSR, signs and packages a public deployment bundle, creates a rotated server certificate, and stages trust updates for server-side validation. Runtime server keys live under `/var/lib/pd-pki/openvpn-server-leaf`.
 
 ### OpenVPN Client Leaf
 
@@ -85,7 +87,7 @@ Implements 4 steps:
 - `rotate-openvpn-client-certificate`
 - `consume-client-trust-updates`
 
-This package generates a representative client key and CSR, signs and packages a client credential bundle, creates a rotated client certificate, and stages trust updates for client-side validation.
+This package generates a representative client CSR, signs and packages a public client credential bundle, creates a rotated client certificate, and stages trust updates for client-side validation. Runtime client keys live under `/var/lib/pd-pki/openvpn-client-leaf`.
 
 ## Flake Outputs
 

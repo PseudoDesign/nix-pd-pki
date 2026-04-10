@@ -19,6 +19,13 @@ let
     "openvpn-client-leaf" = "openvpnClientLeaf";
   };
 
+  roleServiceNames = {
+    "root-certificate-authority" = "pd-pki-root-certificate-authority-init";
+    "intermediate-signing-authority" = "pd-pki-intermediate-signing-authority-init";
+    "openvpn-server-leaf" = "pd-pki-openvpn-server-leaf-init";
+    "openvpn-client-leaf" = "pd-pki-openvpn-client-leaf-init";
+  };
+
   baseModule = { lib, ... }: {
     options.environment = {
       systemPackages = lib.mkOption {
@@ -37,6 +44,11 @@ let
         }));
         default = { };
       };
+    };
+
+    options.systemd.services = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = { };
     };
   };
 
@@ -73,6 +85,7 @@ let
   mkRoleModuleCheck = role:
     let
       optionName = roleOptionNames.${role.id};
+      serviceName = roleServiceNames.${role.id};
       evaluated = evalRoleModule role;
       cfg = getAttrFromPath [
         "services"
@@ -86,6 +99,7 @@ let
         "pd-pki/${role.id}"
         "source"
       ] evaluated.config;
+      runtimePathDirectory = cfg.runtimePaths.directory;
       packagePaths = map toString evaluated.config.environment.systemPackages;
       expectedPackage = toString packages.${role.id};
       expectedSteps = map (step: step.id) role.steps;
@@ -95,6 +109,8 @@ let
         && cfg.stepIds == expectedSteps
         && toString cfg.package == expectedPackage
         && toString etcSource == expectedPackage
+        && builtins.match "/var/lib/pd-pki/.*" runtimePathDirectory != null
+        && builtins.hasAttr serviceName evaluated.config.systemd.services
         && builtins.elem expectedPackage packagePaths;
     in
     {
@@ -138,8 +154,12 @@ let
             "pd-pki/${role.id}"
             "source"
           ] evaluatedDefaultModule.config;
+          serviceName = roleServiceNames.${role.id};
         in
-        cfg.enable && toString etcSource == toString packages.${role.id}
+        cfg.enable
+        && toString etcSource == toString packages.${role.id}
+        && builtins.match "/var/lib/pd-pki/.*" cfg.runtimePaths.directory != null
+        && builtins.hasAttr serviceName evaluatedDefaultModule.config.systemd.services
       )
       definitions.roles;
 in

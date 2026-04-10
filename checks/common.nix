@@ -125,7 +125,6 @@ rec {
   stepCheckCommands = role: step: stepPathRef:
     let
       artifacts = step.implementation.artifacts;
-      keyPath = pathOrEmpty artifacts "key";
       manifestPath =
         if builtins.hasAttr "manifest" artifacts then artifacts.manifest
         else if builtins.hasAttr "metadata" artifacts then artifacts.metadata
@@ -160,12 +159,7 @@ rec {
         printf '%s\n' "[${role.id}/${step.id}] required artifact present: ${file}"
       '') step.requiredFiles}
 
-      # Check optional key, manifest, and request metadata when the step declares them.
-      ${if keyPath != "" then ''
-        printf '%s\n' "[${role.id}/${step.id}] checking key artifact: ${keyPath}"
-        test -f "${stepPathRef}/${keyPath}"
-        printf '%s\n' "[${role.id}/${step.id}] key artifact present: ${keyPath}"
-      '' else ""}
+      # Check optional manifest and request metadata when the step declares them.
       ${if manifestPath != "" && !(hasSuffix ".json" manifestPath) then ''
         printf '%s\n' "[${role.id}/${step.id}] checking manifest artifact: ${manifestPath}"
         test -e "${stepPathRef}/${manifestPath}"

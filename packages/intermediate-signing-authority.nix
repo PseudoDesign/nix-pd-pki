@@ -16,14 +16,19 @@ common.mkRolePackage {
     pkgs.jq
   ];
   buildScript = ''
-    root_artifacts="${rootCertificateAuthority}/steps/create-root-ca/artifacts"
-    root_key="$root_artifacts/root-ca.key.pem"
-    root_cert="$root_artifacts/root-ca.cert.pem"
+    workdir="$(mktemp -d)"
+    trap 'rm -rf "$workdir"' EXIT
+
+    root_private="$workdir/runtime-root"
+    root_key="$root_private/root-ca.key.pem"
+    root_cert="$root_private/root-ca.cert.pem"
+    generate_self_signed_ca "$root_private" "root-ca" "Pseudo Design Test Root CA" 2000 3650 1
 
     create_step="$out/steps/create-intermediate-ca"
     create_artifacts="$create_step/artifacts"
+    create_private="$workdir/create-intermediate-ca"
     generate_signed_ca \
-      "$create_artifacts" \
+      "$create_private" \
       "intermediate-ca" \
       "Pseudo Design Intermediate Signing Authority" \
       2101 \
@@ -31,13 +36,17 @@ common.mkRolePackage {
       0 \
       "$root_key" \
       "$root_cert"
+    cp "$create_private/intermediate-ca.csr.pem" "$create_artifacts/intermediate-ca.csr.pem"
+    cp "$create_private/intermediate-ca.cert.pem" "$create_artifacts/intermediate-ca.cert.pem"
+    cp "$create_private/chain.pem" "$create_artifacts/chain.pem"
     write_certificate_metadata "$create_artifacts/intermediate-ca.cert.pem" "$create_artifacts/signer-metadata.json" "intermediate-ca"
-    write_status "$create_step" "Generated an intermediate CA and signed it with the dummy root certificate."
+    write_status "$create_step" "Generated an intermediate CA and signed it with a build-local dummy root certificate without exporting the intermediate signer key."
 
     rotate_step="$out/steps/rotate-intermediate-ca"
     rotate_artifacts="$rotate_step/artifacts"
+    rotate_private="$workdir/rotate-intermediate-ca"
     generate_signed_ca \
-      "$rotate_artifacts" \
+      "$rotate_private" \
       "replacement-intermediate-ca" \
       "Pseudo Design Intermediate Signing Authority Rotated" \
       2102 \
@@ -45,7 +54,9 @@ common.mkRolePackage {
       0 \
       "$root_key" \
       "$root_cert"
-    mv "$rotate_artifacts/chain.pem" "$rotate_artifacts/replacement-chain.pem"
+    cp "$rotate_private/replacement-intermediate-ca.csr.pem" "$rotate_artifacts/replacement-intermediate-ca.csr.pem"
+    cp "$rotate_private/replacement-intermediate-ca.cert.pem" "$rotate_artifacts/replacement-intermediate-ca.cert.pem"
+    cp "$rotate_private/chain.pem" "$rotate_artifacts/replacement-chain.pem"
     jq -n \
       --arg retiredSerial "$(certificate_serial "$create_artifacts/intermediate-ca.cert.pem")" \
       --arg replacementSerial "$(certificate_serial "$rotate_artifacts/replacement-intermediate-ca.cert.pem")" \
@@ -54,43 +65,51 @@ common.mkRolePackage {
         replacementSerial: $replacementSerial,
         reason: "scheduled-rotation"
       }' > "$rotate_artifacts/retirement-record.json"
-    write_status "$rotate_step" "Provisioned a replacement intermediate CA and recorded retirement metadata."
+    write_status "$rotate_step" "Provisioned a replacement intermediate CA public bundle and recorded retirement metadata without exporting the replacement key."
 
     server_step="$out/steps/sign-openvpn-server-leaf-certificate"
     server_artifacts="$server_step/artifacts"
     server_sans="DNS:vpn.pseudo.test,DNS:openvpn.pseudo.test,IP:127.0.0.1"
-    generate_tls_request "$server_artifacts" "server" "vpn.pseudo.test" "$server_sans" "serverAuth"
+    server_private="$workdir/sign-openvpn-server-leaf-certificate"
+    generate_tls_request "$server_private" "server" "vpn.pseudo.test" "$server_sans" "serverAuth"
     sign_tls_certificate \
-      "$server_artifacts" \
+      "$server_private" \
       "server" \
-      "$server_artifacts/server.csr.pem" \
+      "$server_private/server.csr.pem" \
       "$server_sans" \
       "serverAuth" \
       3101 \
       825 \
-      "$create_artifacts/intermediate-ca.key.pem" \
-      "$create_artifacts/intermediate-ca.cert.pem" \
+      "$create_private/intermediate-ca.key.pem" \
+      "$create_private/intermediate-ca.cert.pem" \
       "$root_cert"
+    cp "$server_private/server.csr.pem" "$server_artifacts/server.csr.pem"
+    cp "$server_private/server.cert.pem" "$server_artifacts/server.cert.pem"
+    cp "$server_private/chain.pem" "$server_artifacts/chain.pem"
     write_certificate_metadata "$server_artifacts/server.cert.pem" "$server_artifacts/issuance-metadata.json" "openvpn-server"
-    write_status "$server_step" "Signed a representative OpenVPN server certificate with the intermediate CA."
+    write_status "$server_step" "Signed a representative OpenVPN server certificate with the intermediate CA while keeping private key material outside the exported artifacts."
 
     client_step="$out/steps/sign-openvpn-client-leaf-certificate"
     client_artifacts="$client_step/artifacts"
     client_sans="DNS:client-01.pseudo.test"
-    generate_tls_request "$client_artifacts" "client" "client-01.pseudo.test" "$client_sans" "clientAuth"
+    client_private="$workdir/sign-openvpn-client-leaf-certificate"
+    generate_tls_request "$client_private" "client" "client-01.pseudo.test" "$client_sans" "clientAuth"
     sign_tls_certificate \
-      "$client_artifacts" \
+      "$client_private" \
       "client" \
-      "$client_artifacts/client.csr.pem" \
+      "$client_private/client.csr.pem" \
       "$client_sans" \
       "clientAuth" \
       3201 \
       825 \
-      "$create_artifacts/intermediate-ca.key.pem" \
-      "$create_artifacts/intermediate-ca.cert.pem" \
+      "$create_private/intermediate-ca.key.pem" \
+      "$create_private/intermediate-ca.cert.pem" \
       "$root_cert"
+    cp "$client_private/client.csr.pem" "$client_artifacts/client.csr.pem"
+    cp "$client_private/client.cert.pem" "$client_artifacts/client.cert.pem"
+    cp "$client_private/chain.pem" "$client_artifacts/chain.pem"
     write_certificate_metadata "$client_artifacts/client.cert.pem" "$client_artifacts/issuance-metadata.json" "openvpn-client"
-    write_status "$client_step" "Signed a representative OpenVPN client certificate with the intermediate CA."
+    write_status "$client_step" "Signed a representative OpenVPN client certificate with the intermediate CA while keeping private key material outside the exported artifacts."
 
     revoke_step="$out/steps/revoke-leaf-certificate"
     revoke_artifacts="$revoke_step/artifacts"

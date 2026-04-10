@@ -29,7 +29,7 @@ let
     {
       id = "root-certificate-authority";
       title = "Root Certificate Authority";
-      description = "Top-level certificate authority for the PKI hierarchy. For automated tests this role simulates the YubiKey-backed flow with deterministic dummy artifacts in the Nix store.";
+      description = "Top-level certificate authority for the PKI hierarchy. For automated tests this role simulates the YubiKey-backed flow with deterministic public artifacts in the Nix store and runtime-managed secret material outside it.";
       steps = [
         (mkStep {
           id = "create-root-ca";
@@ -43,12 +43,11 @@ let
             "Test-mode signer parameters that replace the YubiKey flow"
           ];
           outputs = [
-            "Dummy root private key material for automated testing"
+            "Dummy root CSR generated in an isolated signing workspace"
             "Self-signed root CA certificate"
             "Public metadata such as fingerprint, serial number, and validity window"
           ];
           requiredFiles = [
-            "artifacts/root-ca.key.pem"
             "artifacts/root-ca.csr.pem"
             "artifacts/root-ca.cert.pem"
             "artifacts/root-ca.metadata.json"
@@ -63,9 +62,8 @@ let
           ];
           implementation = {
             kind = "root-ca";
-            note = "Simulated in software for repository checks; no hardware-backed key management is attempted.";
+            note = "Simulated in software for repository checks; the exported artifacts stay public while runtime key management is handled outside the store.";
             artifacts = {
-              key = "artifacts/root-ca.key.pem";
               csr = "artifacts/root-ca.csr.pem";
               certificate = "artifacts/root-ca.cert.pem";
               metadata = "artifacts/root-ca.metadata.json";
@@ -85,11 +83,10 @@ let
           ];
           outputs = [
             "Replacement self-signed root CA certificate"
-            "Replacement private key material for automated testing"
+            "Replacement CSR generated in an isolated signing workspace"
             "Retirement record for the prior root certificate"
           ];
           requiredFiles = [
-            "artifacts/replacement-root-ca.key.pem"
             "artifacts/replacement-root-ca.csr.pem"
             "artifacts/replacement-root-ca.cert.pem"
             "artifacts/replacement-root-ca.metadata.json"
@@ -105,9 +102,8 @@ let
           ];
           implementation = {
             kind = "root-ca";
-            note = "Simulates rotation by minting a second dummy root certificate and recording retirement metadata.";
+            note = "Simulates rotation by minting a second dummy root certificate and recording retirement metadata while keeping the replacement signer key out of the exported artifacts.";
             artifacts = {
-              key = "artifacts/replacement-root-ca.key.pem";
               csr = "artifacts/replacement-root-ca.csr.pem";
               certificate = "artifacts/replacement-root-ca.cert.pem";
               metadata = "artifacts/replacement-root-ca.metadata.json";
@@ -132,7 +128,6 @@ let
             "Issuance metadata for audit purposes"
           ];
           requiredFiles = [
-            "artifacts/intermediate-ca.key.pem"
             "artifacts/intermediate-ca.csr.pem"
             "artifacts/intermediate-ca.cert.pem"
             "artifacts/chain.pem"
@@ -148,9 +143,8 @@ let
           ];
           implementation = {
             kind = "intermediate-ca";
-            note = "Produces a representative intermediate CA signed by the dummy root.";
+            note = "Produces a representative intermediate CA signed by the dummy root while keeping the root signer key outside the exported artifacts.";
             artifacts = {
-              key = "artifacts/intermediate-ca.key.pem";
               csr = "artifacts/intermediate-ca.csr.pem";
               certificate = "artifacts/intermediate-ca.cert.pem";
               chain = "artifacts/chain.pem";
@@ -232,13 +226,13 @@ let
     {
       id = "intermediate-signing-authority";
       title = "Intermediate Signing Authority";
-      description = "Delegated certificate authority signed by the root CA. In automated tests this role uses the dummy root artifacts to mint representative intermediate and leaf material.";
+      description = "Delegated certificate authority signed by the root CA. In automated tests this role uses build-local dummy signers to mint representative public intermediate and leaf material while runtime keys live outside the store.";
       steps = [
         (mkStep {
           id = "create-intermediate-ca";
           order = 1;
           title = "Create Intermediate CA";
-          summary = "Generate an intermediate CA keypair, CSR, root-signed certificate, and chain metadata.";
+          summary = "Generate an intermediate CA CSR, root-signed certificate, and chain metadata.";
           inputs = [
             "Intermediate subject metadata"
             "Intermediate certificate profile and policy constraints"
@@ -246,12 +240,11 @@ let
             "Access to the root CA workflow needed to sign the intermediate CSR"
           ];
           outputs = [
-            "Intermediate private key material generated in the designated signing environment"
+            "Intermediate CA CSR generated in the designated signing environment"
             "Root-signed intermediate CA certificate"
             "Certificate chain linking the intermediate to the root CA"
           ];
           requiredFiles = [
-            "artifacts/intermediate-ca.key.pem"
             "artifacts/intermediate-ca.csr.pem"
             "artifacts/intermediate-ca.cert.pem"
             "artifacts/chain.pem"
@@ -267,9 +260,8 @@ let
           ];
           implementation = {
             kind = "intermediate-ca";
-            note = "Uses the dummy root CA created by the root package as the signer.";
+            note = "Uses a build-local dummy root signer and exports only the public intermediate artifacts.";
             artifacts = {
-              key = "artifacts/intermediate-ca.key.pem";
               csr = "artifacts/intermediate-ca.csr.pem";
               certificate = "artifacts/intermediate-ca.cert.pem";
               chain = "artifacts/chain.pem";
@@ -289,12 +281,11 @@ let
             "Access to the root CA workflow to sign the replacement CSR"
           ];
           outputs = [
-            "Replacement intermediate private key material"
+            "Replacement intermediate CSR generated in the designated signing environment"
             "Replacement root-signed intermediate CA certificate"
             "Retirement record for the prior intermediate certificate"
           ];
           requiredFiles = [
-            "artifacts/replacement-intermediate-ca.key.pem"
             "artifacts/replacement-intermediate-ca.csr.pem"
             "artifacts/replacement-intermediate-ca.cert.pem"
             "artifacts/replacement-chain.pem"
@@ -310,9 +301,8 @@ let
           ];
           implementation = {
             kind = "intermediate-ca";
-            note = "Creates a second representative intermediate signed by the dummy root.";
+            note = "Creates a second representative intermediate signed by the dummy root while keeping the replacement key outside the exported artifacts.";
             artifacts = {
-              key = "artifacts/replacement-intermediate-ca.key.pem";
               csr = "artifacts/replacement-intermediate-ca.csr.pem";
               certificate = "artifacts/replacement-intermediate-ca.cert.pem";
               chain = "artifacts/replacement-chain.pem";
@@ -337,7 +327,6 @@ let
             "Audit record of the signing event"
           ];
           requiredFiles = [
-            "artifacts/server.key.pem"
             "artifacts/server.csr.pem"
             "artifacts/server.cert.pem"
             "artifacts/chain.pem"
@@ -354,9 +343,8 @@ let
           ];
           implementation = {
             kind = "server-leaf";
-            note = "Generates a representative server CSR inside the build and signs it with the intermediate.";
+            note = "Generates a representative server CSR inside the build and signs it with the intermediate while keeping private key material outside the exported artifacts.";
             artifacts = {
-              key = "artifacts/server.key.pem";
               csr = "artifacts/server.csr.pem";
               certificate = "artifacts/server.cert.pem";
               chain = "artifacts/chain.pem";
@@ -381,7 +369,6 @@ let
             "Audit record of the signing event"
           ];
           requiredFiles = [
-            "artifacts/client.key.pem"
             "artifacts/client.csr.pem"
             "artifacts/client.cert.pem"
             "artifacts/chain.pem"
@@ -397,9 +384,8 @@ let
           ];
           implementation = {
             kind = "client-leaf";
-            note = "Generates a representative client CSR inside the build and signs it with the intermediate.";
+            note = "Generates a representative client CSR inside the build and signs it with the intermediate while keeping private key material outside the exported artifacts.";
             artifacts = {
-              key = "artifacts/client.key.pem";
               csr = "artifacts/client.csr.pem";
               certificate = "artifacts/client.cert.pem";
               chain = "artifacts/chain.pem";
@@ -483,13 +469,13 @@ let
     {
       id = "openvpn-server-leaf";
       title = "OpenVPN Server Leaf";
-      description = "Leaf-certificate workflow for OpenVPN server identities. In tests it generates representative requests, bundles, rotation artifacts, and trust consumption state.";
+      description = "Leaf-certificate workflow for OpenVPN server identities. In tests it generates representative public requests, bundles, rotation artifacts, and trust consumption state while runtime keys live under mutable host storage.";
       steps = [
         (mkStep {
           id = "create-openvpn-server-leaf-request";
           order = 1;
           title = "Create OpenVPN Server Leaf Request";
-          summary = "Generate a representative OpenVPN server private key, CSR, and SAN manifest.";
+          summary = "Generate a representative OpenVPN server CSR and SAN manifest.";
           inputs = [
             "Server subject metadata such as common name or service identity"
             "Requested subject alternative names such as DNS names or IP addresses"
@@ -497,12 +483,11 @@ let
             "Deployment metadata describing the OpenVPN server instance or environment"
           ];
           outputs = [
-            "Server private key material for automated testing"
             "OpenVPN server certificate signing request"
             "Subject and SAN manifest for review before issuance"
+            "Request metadata that points deployments at a runtime-managed key path"
           ];
           requiredFiles = [
-            "artifacts/server.key.pem"
             "artifacts/server.csr.pem"
             "artifacts/san-manifest.json"
             "artifacts/issuance-request.json"
@@ -515,9 +500,8 @@ let
           ];
           implementation = {
             kind = "server-request";
-            note = "Produces a representative server keypair and CSR suitable for the intermediate signer.";
+            note = "Produces a representative server CSR suitable for the intermediate signer while leaving key management to the runtime host.";
             artifacts = {
-              key = "artifacts/server.key.pem";
               csr = "artifacts/server.csr.pem";
               manifest = "artifacts/san-manifest.json";
               request = "artifacts/issuance-request.json";
@@ -528,7 +512,7 @@ let
           id = "package-openvpn-server-deployment-bundle";
           order = 2;
           title = "Package OpenVPN Server Deployment Bundle";
-          summary = "Assemble a deployment-ready bundle containing the representative server certificate, key, chain, and trust metadata.";
+          summary = "Assemble a deployment bundle containing the representative server certificate, chain, trust metadata, and runtime key path hint.";
           inputs = [
             "Signed OpenVPN server leaf certificate"
             "Intermediate and root certificate chain"
@@ -536,12 +520,11 @@ let
             "Packaging requirements such as file layout, naming, and deployment metadata"
           ];
           outputs = [
-            "Deployment-ready OpenVPN server bundle"
+            "Deployment-ready OpenVPN server public bundle"
             "Server certificate and trust chain in the expected packaging format"
-            "Bundle manifest describing serial number, validity window, and subject alternative names"
+            "Bundle manifest describing serial number, validity window, subject alternative names, and the runtime key location"
           ];
           requiredFiles = [
-            "artifacts/deployment-bundle/server.key.pem"
             "artifacts/deployment-bundle/server.cert.pem"
             "artifacts/deployment-bundle/chain.pem"
             "artifacts/deployment-bundle/revocation-record.json"
@@ -556,7 +539,7 @@ let
           ];
           implementation = {
             kind = "server-bundle";
-            note = "Signs the generated server CSR with the intermediate CA and packages the result.";
+            note = "Signs the generated server CSR with the intermediate CA and packages only the public deployment artifacts.";
             artifacts = {
               bundle = "artifacts/deployment-bundle";
               manifest = "artifacts/bundle-manifest.json";
@@ -569,7 +552,7 @@ let
           id = "rotate-openvpn-server-certificate";
           order = 3;
           title = "Rotate OpenVPN Server Certificate";
-          summary = "Generate replacement server key material, issue a replacement certificate, and record retirement metadata.";
+          summary = "Generate a replacement server CSR, issue a replacement certificate, and record retirement metadata.";
           inputs = [
             "Existing server certificate and deployment metadata"
             "New server subject or SAN inputs, if changed"
@@ -577,12 +560,11 @@ let
             "Replacement validity period and activation window"
           ];
           outputs = [
-            "Replacement server private key material"
             "Replacement signed OpenVPN server certificate and chain"
             "Retirement record for the previous certificate"
+            "Replacement CSR suitable for runtime-managed rekeying"
           ];
           requiredFiles = [
-            "artifacts/replacement-server.key.pem"
             "artifacts/replacement-server.csr.pem"
             "artifacts/replacement-server.cert.pem"
             "artifacts/replacement-chain.pem"
@@ -598,9 +580,8 @@ let
           ];
           implementation = {
             kind = "server-rotation";
-            note = "Rekeys and issues a replacement server certificate for rollout testing.";
+            note = "Issues a replacement server certificate for rollout testing while leaving the replacement private key under runtime host control.";
             artifacts = {
-              key = "artifacts/replacement-server.key.pem";
               csr = "artifacts/replacement-server.csr.pem";
               certificate = "artifacts/replacement-server.cert.pem";
               chain = "artifacts/replacement-chain.pem";
@@ -649,13 +630,13 @@ let
     {
       id = "openvpn-client-leaf";
       title = "OpenVPN Client Leaf";
-      description = "Leaf-certificate workflow for OpenVPN client identities. In tests it generates representative requests, bundles, rotation artifacts, and trust consumption state.";
+      description = "Leaf-certificate workflow for OpenVPN client identities. In tests it generates representative public requests, bundles, rotation artifacts, and trust consumption state while runtime keys live under mutable host storage.";
       steps = [
         (mkStep {
           id = "create-openvpn-client-leaf-request";
           order = 1;
           title = "Create OpenVPN Client Leaf Request";
-          summary = "Generate a representative OpenVPN client private key, CSR, and identity manifest.";
+          summary = "Generate a representative OpenVPN client CSR and identity manifest.";
           inputs = [
             "Client identity metadata such as user, device, or service account attributes"
             "Subject naming policy inputs used to construct the client certificate subject"
@@ -663,12 +644,11 @@ let
             "Enrollment metadata describing the client device, token, or distribution channel"
           ];
           outputs = [
-            "Client private key material for automated testing"
             "OpenVPN client certificate signing request"
             "Identity manifest describing the requested subject and related client metadata"
+            "Request metadata that points distributions at a runtime-managed key path"
           ];
           requiredFiles = [
-            "artifacts/client.key.pem"
             "artifacts/client.csr.pem"
             "artifacts/identity-manifest.json"
             "artifacts/issuance-request.json"
@@ -680,9 +660,8 @@ let
           ];
           implementation = {
             kind = "client-request";
-            note = "Produces a representative client keypair and CSR suitable for the intermediate signer.";
+            note = "Produces a representative client CSR suitable for the intermediate signer while leaving key management to the runtime host.";
             artifacts = {
-              key = "artifacts/client.key.pem";
               csr = "artifacts/client.csr.pem";
               manifest = "artifacts/identity-manifest.json";
               request = "artifacts/issuance-request.json";
@@ -693,7 +672,7 @@ let
           id = "package-openvpn-client-credential-bundle";
           order = 2;
           title = "Package OpenVPN Client Credential Bundle";
-          summary = "Assemble a distribution-ready client credential bundle containing the representative certificate, key, chain, and trust metadata.";
+          summary = "Assemble a distribution-ready client credential bundle containing the representative certificate, chain, trust metadata, and runtime key path hint.";
           inputs = [
             "Signed OpenVPN client leaf certificate"
             "Intermediate and root certificate chain"
@@ -701,12 +680,11 @@ let
             "Distribution requirements such as archive format, file layout, and client configuration metadata"
           ];
           outputs = [
-            "Distribution-ready OpenVPN client credential bundle"
+            "Distribution-ready OpenVPN client public credential bundle"
             "Client certificate and trust chain in the expected packaging format"
-            "Bundle manifest describing serial number, validity window, and client identity metadata"
+            "Bundle manifest describing serial number, validity window, client identity metadata, and the runtime key location"
           ];
           requiredFiles = [
-            "artifacts/credential-bundle/client.key.pem"
             "artifacts/credential-bundle/client.cert.pem"
             "artifacts/credential-bundle/chain.pem"
             "artifacts/credential-bundle/revocation-record.json"
@@ -721,7 +699,7 @@ let
           ];
           implementation = {
             kind = "client-bundle";
-            note = "Signs the generated client CSR with the intermediate CA and packages the result.";
+            note = "Signs the generated client CSR with the intermediate CA and packages only the public credential artifacts.";
             artifacts = {
               bundle = "artifacts/credential-bundle";
               manifest = "artifacts/bundle-manifest.json";
@@ -734,7 +712,7 @@ let
           id = "rotate-openvpn-client-certificate";
           order = 3;
           title = "Rotate OpenVPN Client Certificate";
-          summary = "Generate replacement client key material, issue a replacement certificate, and record retirement metadata.";
+          summary = "Generate a replacement client CSR, issue a replacement certificate, and record retirement metadata.";
           inputs = [
             "Existing client certificate and distribution metadata"
             "New client identity or subject naming inputs, if changed"
@@ -742,12 +720,11 @@ let
             "Replacement validity period and activation window"
           ];
           outputs = [
-            "Replacement client private key material"
             "Replacement signed OpenVPN client certificate and chain"
             "Retirement record for the previous certificate"
+            "Replacement CSR suitable for runtime-managed rekeying"
           ];
           requiredFiles = [
-            "artifacts/replacement-client.key.pem"
             "artifacts/replacement-client.csr.pem"
             "artifacts/replacement-client.cert.pem"
             "artifacts/replacement-chain.pem"
@@ -763,9 +740,8 @@ let
           ];
           implementation = {
             kind = "client-rotation";
-            note = "Rekeys and issues a replacement client certificate for rollout testing.";
+            note = "Issues a replacement client certificate for rollout testing while leaving the replacement private key under runtime host control.";
             artifacts = {
-              key = "artifacts/replacement-client.key.pem";
               csr = "artifacts/replacement-client.csr.pem";
               certificate = "artifacts/replacement-client.cert.pem";
               chain = "artifacts/replacement-chain.pem";

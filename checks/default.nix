@@ -57,7 +57,7 @@ let
     {
       name = "openvpn-mutual-auth";
       value = import ./openvpn-mutual-auth.nix {
-        inherit pkgs packages;
+        inherit pkgs nixosModules;
       };
     }
     {

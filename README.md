@@ -648,6 +648,8 @@ nix build .#root-certificate-authority
 nix build .#intermediate-signing-authority
 nix build .#openvpn-server-leaf
 nix build .#openvpn-client-leaf
+nix flake check -L --keep-going
+nix run .#test-report
 ```
 
 TODO:

@@ -6,6 +6,13 @@
   outputs = { nixpkgs, ... }:
     let
       definitions = import ./packages/definitions.nix;
+      checkNames =
+        [
+          "define-contract"
+          "pd-pki"
+        ]
+        ++ map (role: role.id) definitions.roles
+        ++ builtins.concatLists (map (role: map (step: "${role.id}-${step.id}") role.steps) definitions.roles);
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -23,6 +30,7 @@
         roles = definitions.roleMap;
         roleCount = definitions.roleCount;
         stepCount = definitions.stepCount;
+        inherit checkNames;
       };
 
       packages = forAllSystems (
@@ -41,6 +49,21 @@
         in
         import ./checks {
           inherit pkgs definitions packages;
+        }
+      );
+
+      apps = forAllSystems (
+        pkgs:
+        let
+          appPackages = import ./apps {
+            inherit pkgs definitions checkNames;
+          };
+        in
+        {
+          test-report = {
+            type = "app";
+            program = "${appPackages.testReport}/bin/test-report";
+          };
         }
       );
     };

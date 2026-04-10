@@ -32,52 +32,21 @@ Still to define:
 
 Top-level certificate authority for the PKI hierarchy. This role performs a small set of high-trust operations and should not issue OpenVPN server or client leaf certificates directly. The root signing key is intended to live on a dedicated YubiKey so root signing is hardware-backed and the private key remains non-exportable.
 
+#### 1. Create Root CA
+
 ```mermaid
 sequenceDiagram
-  autonumber
   actor Operator
   participant Workflow as Root CA Workflow
   participant YubiKey as Root YubiKey
-  participant Intermediate as Intermediate CA Requester
-  participant Publish as Trust Artifact Publication
 
-  Note over Operator,Publish: 1. Create Root CA
   Operator->>Workflow: Provide subject, policy, validity, and device parameters
   Workflow->>YubiKey: Generate or import non-exportable root key
   YubiKey-->>Workflow: Return public key and device metadata
   Workflow->>YubiKey: Sign self-signed root certificate
   YubiKey-->>Workflow: Return certificate signature
-  Workflow-->>Operator: Root certificate and audit metadata
-
-  Note over Operator,Publish: 2. Rotate Root CA
-  Operator->>Workflow: Approve rotation and replacement device parameters
-  Workflow->>YubiKey: Provision replacement root key
-  YubiKey-->>Workflow: Return replacement public key and device metadata
-  Workflow->>YubiKey: Sign replacement root certificate
-  YubiKey-->>Workflow: Return replacement certificate signature
-  Workflow-->>Operator: Rotation record and updated metadata
-
-  Note over Operator,Publish: 3. Sign Intermediate CA Certificate
-  Intermediate->>Workflow: Submit approved intermediate CA CSR
-  Operator->>Workflow: Provide issuance policy and authenticate to YubiKey
-  Workflow->>YubiKey: Sign intermediate CA certificate
-  YubiKey-->>Workflow: Return signed intermediate CA certificate
-  Workflow-->>Intermediate: Deliver issued intermediate CA certificate
-  Workflow-->>Operator: Record signing audit event
-
-  Note over Operator,Publish: 4. Revoke Intermediate CA Certificate
-  Operator->>Workflow: Submit intermediate certificate ID, reason, and effective time
-  Workflow->>YubiKey: Sign updated revocation artifact
-  YubiKey-->>Workflow: Return signed CRL or equivalent
-  Workflow-->>Operator: Record revocation audit event
-
-  Note over Operator,Publish: 5. Publish Root Trust Artifacts
-  Operator->>Workflow: Approve publication set
-  Workflow->>Publish: Publish root certificate, intermediates, revocation artifacts, and public device metadata
-  Publish-->>Operator: Confirm published trust bundle and status
+  Workflow-->>Operator: Return root certificate and audit metadata
 ```
-
-#### 1. Create Root CA
 
 Inputs:
 
@@ -96,6 +65,20 @@ Outputs:
 
 #### 2. Rotate Root CA
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as Root CA Workflow
+  participant YubiKey as Root YubiKey
+
+  Operator->>Workflow: Approve rotation and replacement device parameters
+  Workflow->>YubiKey: Provision replacement root key
+  YubiKey-->>Workflow: Return replacement public key and device metadata
+  Workflow->>YubiKey: Sign replacement root certificate
+  YubiKey-->>Workflow: Return replacement certificate signature
+  Workflow-->>Operator: Return rotation record and updated metadata
+```
+
 Inputs:
 
 - Existing root CA metadata
@@ -113,6 +96,21 @@ Outputs:
 
 #### 3. Sign Intermediate CA Certificate
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Intermediate as Intermediate CA Requester
+  participant Workflow as Root CA Workflow
+  participant YubiKey as Root YubiKey
+
+  Intermediate->>Workflow: Submit approved intermediate CA CSR
+  Operator->>Workflow: Provide issuance policy and authenticate to YubiKey
+  Workflow->>YubiKey: Sign intermediate CA certificate
+  YubiKey-->>Workflow: Return signed intermediate CA certificate
+  Workflow-->>Intermediate: Deliver issued intermediate CA certificate
+  Workflow-->>Operator: Record signing audit event
+```
+
 Inputs:
 
 - Approved intermediate CA certificate signing request
@@ -129,6 +127,18 @@ Outputs:
 
 #### 4. Revoke Intermediate CA Certificate
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as Root CA Workflow
+  participant YubiKey as Root YubiKey
+
+  Operator->>Workflow: Submit intermediate certificate ID, reason, and effective time
+  Workflow->>YubiKey: Sign updated revocation artifact
+  YubiKey-->>Workflow: Return signed CRL or equivalent
+  Workflow-->>Operator: Record revocation audit event
+```
+
 Inputs:
 
 - Identifier for the intermediate CA certificate to revoke
@@ -143,6 +153,17 @@ Outputs:
 - Updated public status for downstream consumers
 
 #### 5. Publish Root Trust Artifacts
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as Root CA Workflow
+  participant Publish as Trust Artifact Publication
+
+  Operator->>Workflow: Approve publication set
+  Workflow->>Publish: Publish root certificate, intermediates, revocation artifacts, and public device metadata
+  Publish-->>Operator: Confirm published trust bundle and status
+```
 
 Inputs:
 
@@ -162,62 +183,22 @@ Outputs:
 
 Delegated certificate authority signed by the root certificate authority. This role performs the higher-frequency issuance work for OpenVPN server and client leaf certificates, manages leaf revocation status, and publishes intermediate trust artifacts so the root CA can stay reserved for infrequent high-trust operations. The intermediate signing key is intended to live in a dedicated signing environment or hardware-backed device appropriate for operational issuance.
 
+#### 1. Create Intermediate CA
+
 ```mermaid
 sequenceDiagram
-  autonumber
   actor Operator
   participant Workflow as Intermediate CA Workflow
-  participant Root as Root CA Workflow
   participant Signer as Intermediate Signing Environment
-  participant Server as OpenVPN Server Requester
-  participant Client as OpenVPN Client Requester
-  participant Publish as Trust Artifact Publication
+  participant Root as Root CA Workflow
 
-  Note over Operator,Publish: 1. Create Intermediate CA
   Operator->>Workflow: Provide subject, policy, validity, signer parameters, and root approval context
   Workflow->>Signer: Generate or import intermediate signing key
   Signer-->>Workflow: Return public key and signer metadata
   Workflow->>Root: Submit intermediate CSR for approval and root signature
   Root-->>Workflow: Return signed intermediate CA certificate
-  Workflow-->>Operator: Intermediate certificate, chain, and audit metadata
-
-  Note over Operator,Publish: 2. Rotate Intermediate CA
-  Operator->>Workflow: Approve rotation and replacement signer parameters
-  Workflow->>Signer: Provision replacement intermediate key
-  Signer-->>Workflow: Return replacement public key and signer metadata
-  Workflow->>Root: Submit replacement intermediate CSR for root signature
-  Root-->>Workflow: Return replacement intermediate CA certificate
-  Workflow-->>Operator: Rotation record and updated chain metadata
-
-  Note over Operator,Publish: 3. Sign OpenVPN Server Leaf Certificate
-  Server->>Workflow: Submit approved server CSR and requested SANs
-  Operator->>Workflow: Provide server issuance policy
-  Workflow->>Signer: Sign OpenVPN server certificate
-  Signer-->>Workflow: Return signed server certificate
-  Workflow-->>Server: Deliver server certificate and chain
-  Workflow-->>Operator: Record server signing audit event
-
-  Note over Operator,Publish: 4. Sign OpenVPN Client Leaf Certificate
-  Client->>Workflow: Submit approved client CSR and identity metadata
-  Operator->>Workflow: Provide client issuance policy
-  Workflow->>Signer: Sign OpenVPN client certificate
-  Signer-->>Workflow: Return signed client certificate
-  Workflow-->>Client: Deliver client certificate and chain
-  Workflow-->>Operator: Record client signing audit event
-
-  Note over Operator,Publish: 5. Revoke Leaf Certificate
-  Operator->>Workflow: Submit leaf certificate ID, reason, and effective time
-  Workflow->>Signer: Sign updated revocation artifact
-  Signer-->>Workflow: Return signed CRL or equivalent
-  Workflow-->>Operator: Record revocation audit event
-
-  Note over Operator,Publish: 6. Publish Intermediate Trust Artifacts
-  Operator->>Workflow: Approve publication set
-  Workflow->>Publish: Publish intermediate certificate, chain, revocation artifacts, and issuance metadata
-  Publish-->>Operator: Confirm published trust bundle and status
+  Workflow-->>Operator: Return intermediate certificate, chain, and audit metadata
 ```
-
-#### 1. Create Intermediate CA
 
 Inputs:
 
@@ -236,6 +217,21 @@ Outputs:
 
 #### 2. Rotate Intermediate CA
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as Intermediate CA Workflow
+  participant Signer as Intermediate Signing Environment
+  participant Root as Root CA Workflow
+
+  Operator->>Workflow: Approve rotation and replacement signer parameters
+  Workflow->>Signer: Provision replacement intermediate key
+  Signer-->>Workflow: Return replacement public key and signer metadata
+  Workflow->>Root: Submit replacement intermediate CSR for root signature
+  Root-->>Workflow: Return replacement intermediate CA certificate
+  Workflow-->>Operator: Return rotation record and updated chain metadata
+```
+
 Inputs:
 
 - Existing intermediate CA metadata
@@ -252,6 +248,21 @@ Outputs:
 - Retirement record for the previous intermediate key and certificate, if applicable
 
 #### 3. Sign OpenVPN Server Leaf Certificate
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Server as OpenVPN Server Requester
+  participant Workflow as Intermediate CA Workflow
+  participant Signer as Intermediate Signing Environment
+
+  Server->>Workflow: Submit approved server CSR and requested SANs
+  Operator->>Workflow: Provide server issuance policy
+  Workflow->>Signer: Sign OpenVPN server certificate
+  Signer-->>Workflow: Return signed server certificate
+  Workflow-->>Server: Deliver server certificate and chain
+  Workflow-->>Operator: Record server signing audit event
+```
 
 Inputs:
 
@@ -270,6 +281,21 @@ Outputs:
 
 #### 4. Sign OpenVPN Client Leaf Certificate
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Client as OpenVPN Client Requester
+  participant Workflow as Intermediate CA Workflow
+  participant Signer as Intermediate Signing Environment
+
+  Client->>Workflow: Submit approved client CSR and identity metadata
+  Operator->>Workflow: Provide client issuance policy
+  Workflow->>Signer: Sign OpenVPN client certificate
+  Signer-->>Workflow: Return signed client certificate
+  Workflow-->>Client: Deliver client certificate and chain
+  Workflow-->>Operator: Record client signing audit event
+```
+
 Inputs:
 
 - Approved OpenVPN client certificate signing request
@@ -287,6 +313,18 @@ Outputs:
 
 #### 5. Revoke Leaf Certificate
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as Intermediate CA Workflow
+  participant Signer as Intermediate Signing Environment
+
+  Operator->>Workflow: Submit leaf certificate ID, reason, and effective time
+  Workflow->>Signer: Sign updated revocation artifact
+  Signer-->>Workflow: Return signed CRL or equivalent
+  Workflow-->>Operator: Record revocation audit event
+```
+
 Inputs:
 
 - Identifier for the leaf certificate to revoke
@@ -302,6 +340,17 @@ Outputs:
 - Distribution-ready revocation metadata for OpenVPN roles
 
 #### 6. Publish Intermediate Trust Artifacts
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as Intermediate CA Workflow
+  participant Publish as Trust Artifact Publication
+
+  Operator->>Workflow: Approve publication set
+  Workflow->>Publish: Publish intermediate certificate, chain, revocation artifacts, and issuance metadata
+  Publish-->>Operator: Confirm published trust bundle and status
+```
 
 Inputs:
 

@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-report:
+    name: Test Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REPORT_ROOT: reports
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3
+
+      - name: Run flake checks and generate test report
+        run: |
+          mkdir -p "$REPORT_ROOT"
+          nix run .#test-report -- --out-dir "$REPORT_ROOT" --verbose
+
+      - name: Add test report to workflow summary
+        if: ${{ always() }}
+        run: |
+          report_md=""
+          if [ -d "$REPORT_ROOT" ]; then
+            report_md="$(find "$REPORT_ROOT" -type f -name report.md | sort | tail -n 1)"
+          fi
+
+          if [ -n "$report_md" ]; then
+            cat "$report_md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              printf '# pd-pki Test Report\n\n'
+              printf 'No `report.md` file was generated. Review the job logs for details.\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload test report artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: pd-pki-test-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT_ROOT }}/
+          if-no-files-found: warn
+          retention-days: 14

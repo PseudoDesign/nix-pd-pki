@@ -32,6 +32,51 @@ Still to define:
 
 Top-level certificate authority for the PKI hierarchy. This role performs a small set of high-trust operations and should not issue OpenVPN server or client leaf certificates directly. The root signing key is intended to live on a dedicated YubiKey so root signing is hardware-backed and the private key remains non-exportable.
 
+```mermaid
+sequenceDiagram
+  autonumber
+  actor Operator
+  participant Workflow as Root CA Workflow
+  participant YubiKey as Root YubiKey
+  participant Intermediate as Intermediate CA Requester
+  participant Publish as Trust Artifact Publication
+
+  Note over Operator,Publish: 1. Create Root CA
+  Operator->>Workflow: Provide subject, policy, validity, and device parameters
+  Workflow->>YubiKey: Generate or import non-exportable root key
+  YubiKey-->>Workflow: Return public key and device metadata
+  Workflow->>YubiKey: Sign self-signed root certificate
+  YubiKey-->>Workflow: Return certificate signature
+  Workflow-->>Operator: Root certificate and audit metadata
+
+  Note over Operator,Publish: 2. Rotate Root CA
+  Operator->>Workflow: Approve rotation and replacement device parameters
+  Workflow->>YubiKey: Provision replacement root key
+  YubiKey-->>Workflow: Return replacement public key and device metadata
+  Workflow->>YubiKey: Sign replacement root certificate
+  YubiKey-->>Workflow: Return replacement certificate signature
+  Workflow-->>Operator: Rotation record and updated metadata
+
+  Note over Operator,Publish: 3. Sign Intermediate CA Certificate
+  Intermediate->>Workflow: Submit approved intermediate CA CSR
+  Operator->>Workflow: Provide issuance policy and authenticate to YubiKey
+  Workflow->>YubiKey: Sign intermediate CA certificate
+  YubiKey-->>Workflow: Return signed intermediate CA certificate
+  Workflow-->>Intermediate: Deliver issued intermediate CA certificate
+  Workflow-->>Operator: Record signing audit event
+
+  Note over Operator,Publish: 4. Revoke Intermediate CA Certificate
+  Operator->>Workflow: Submit intermediate certificate ID, reason, and effective time
+  Workflow->>YubiKey: Sign updated revocation artifact
+  YubiKey-->>Workflow: Return signed CRL or equivalent
+  Workflow-->>Operator: Record revocation audit event
+
+  Note over Operator,Publish: 5. Publish Root Trust Artifacts
+  Operator->>Workflow: Approve publication set
+  Workflow->>Publish: Publish root certificate, intermediates, revocation artifacts, and public device metadata
+  Publish-->>Operator: Confirm published trust bundle and status
+```
+
 #### 1. Create Root CA
 
 Inputs:

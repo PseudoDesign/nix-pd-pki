@@ -2,24 +2,41 @@
   pkgs,
   definitions,
   packages,
+  nixosModules,
 }:
 let
   inherit (pkgs.lib) listToAttrs;
 
-  rootChecks = import ./root-certificate-authority.nix {
-    inherit pkgs definitions packages;
-  };
+  roleChecks =
+    if pkgs.stdenv.hostPlatform.isLinux then
+      import ./nixos-role-topology.nix {
+        inherit pkgs definitions packages nixosModules;
+      }
+    else
+      let
+        rootChecks = import ./root-certificate-authority.nix {
+          inherit pkgs definitions packages;
+        };
 
-  intermediateChecks = import ./intermediate-signing-authority.nix {
-    inherit pkgs definitions packages;
-  };
+        intermediateChecks = import ./intermediate-signing-authority.nix {
+          inherit pkgs definitions packages;
+        };
 
-  serverChecks = import ./openvpn-server-leaf.nix {
-    inherit pkgs definitions packages;
-  };
+        serverChecks = import ./openvpn-server-leaf.nix {
+          inherit pkgs definitions packages;
+        };
 
-  clientChecks = import ./openvpn-client-leaf.nix {
-    inherit pkgs definitions packages;
+        clientChecks = import ./openvpn-client-leaf.nix {
+          inherit pkgs definitions packages;
+        };
+      in
+      rootChecks
+      // intermediateChecks
+      // serverChecks
+      // clientChecks;
+
+  moduleChecks = import ./nixos-modules.nix {
+    inherit pkgs definitions packages nixosModules;
   };
 
   sharedChecks = listToAttrs [
@@ -57,7 +74,5 @@ let
 in
 # Aggregate the shared checks plus one imported check set per role.
 sharedChecks
-// rootChecks
-// intermediateChecks
-// serverChecks
-// clientChecks
+// roleChecks
+// moduleChecks

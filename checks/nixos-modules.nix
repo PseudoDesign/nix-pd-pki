@@ -1,0 +1,158 @@
+{
+  pkgs,
+  definitions,
+  packages,
+  nixosModules,
+}:
+let
+  inherit (pkgs.lib)
+    getAttrFromPath
+    listToAttrs
+    recursiveUpdate
+    setAttrByPath
+    ;
+
+  roleOptionNames = {
+    "root-certificate-authority" = "rootCertificateAuthority";
+    "intermediate-signing-authority" = "intermediateSigningAuthority";
+    "openvpn-server-leaf" = "openvpnServerLeaf";
+    "openvpn-client-leaf" = "openvpnClientLeaf";
+  };
+
+  baseModule = { lib, ... }: {
+    options.environment = {
+      systemPackages = lib.mkOption {
+        type = lib.types.listOf lib.types.package;
+        default = [ ];
+      };
+
+      etc = lib.mkOption {
+        type = lib.types.attrsOf (lib.types.submodule ({ lib, ... }: {
+          options.source = lib.mkOption {
+            type = lib.types.oneOf [
+              lib.types.path
+              lib.types.package
+            ];
+          };
+        }));
+        default = { };
+      };
+    };
+  };
+
+  enableRoleModule = role:
+    let
+      optionName = roleOptionNames.${role.id};
+    in
+    recursiveUpdate
+      (setAttrByPath [
+        "services"
+        "pd-pki"
+        "roles"
+        optionName
+        "enable"
+      ] true)
+      (setAttrByPath [
+        "services"
+        "pd-pki"
+        "roles"
+        optionName
+        "installPackage"
+      ] true);
+
+  evalRoleModule = role:
+    pkgs.lib.evalModules {
+      specialArgs = { inherit pkgs; };
+      modules = [
+        baseModule
+        nixosModules.${role.id}
+        (enableRoleModule role)
+      ];
+    };
+
+  mkRoleModuleCheck = role:
+    let
+      optionName = roleOptionNames.${role.id};
+      evaluated = evalRoleModule role;
+      cfg = getAttrFromPath [
+        "services"
+        "pd-pki"
+        "roles"
+        optionName
+      ] evaluated.config;
+      etcSource = getAttrFromPath [
+        "environment"
+        "etc"
+        "pd-pki/${role.id}"
+        "source"
+      ] evaluated.config;
+      packagePaths = map toString evaluated.config.environment.systemPackages;
+      expectedPackage = toString packages.${role.id};
+      expectedSteps = map (step: step.id) role.steps;
+      checksPassed =
+        cfg.enable
+        && cfg.definition.id == role.id
+        && cfg.stepIds == expectedSteps
+        && toString cfg.package == expectedPackage
+        && toString etcSource == expectedPackage
+        && builtins.elem expectedPackage packagePaths;
+    in
+    {
+      name = "nixos-module-${role.id}";
+      value =
+        assert checksPassed;
+        pkgs.runCommand "nixos-module-${role.id}-check" { } ''
+          touch "$out"
+        '';
+    };
+
+  enableAllRoles =
+    builtins.foldl'
+      recursiveUpdate
+      { }
+      (map enableRoleModule definitions.roles);
+
+  evaluatedDefaultModule = pkgs.lib.evalModules {
+    specialArgs = { inherit pkgs; };
+    modules = [
+      baseModule
+      nixosModules.default
+      enableAllRoles
+    ];
+  };
+
+  defaultModuleChecksPassed =
+    builtins.all
+      (role:
+        let
+          optionName = roleOptionNames.${role.id};
+          cfg = getAttrFromPath [
+            "services"
+            "pd-pki"
+            "roles"
+            optionName
+          ] evaluatedDefaultModule.config;
+          etcSource = getAttrFromPath [
+            "environment"
+            "etc"
+            "pd-pki/${role.id}"
+            "source"
+          ] evaluatedDefaultModule.config;
+        in
+        cfg.enable && toString etcSource == toString packages.${role.id}
+      )
+      definitions.roles;
+in
+listToAttrs (
+  [
+    {
+      name = "nixos-module-default";
+      value =
+        assert defaultModuleChecksPassed;
+        pkgs.runCommand "nixos-module-default-check" { } ''
+          touch "$out"
+        '';
+    }
+  ]
+  ++ map mkRoleModuleCheck definitions.roles
+)

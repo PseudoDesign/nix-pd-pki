@@ -6,13 +6,18 @@
   outputs = { nixpkgs, ... }:
     let
       definitions = import ./packages/definitions.nix;
+      nixosModules = import ./modules;
+      moduleCheckNames =
+        [ "nixos-module-default" ]
+        ++ map (role: "nixos-module-${role.id}") definitions.roles;
       checkNames =
         [
           "define-contract"
           "pd-pki"
         ]
         ++ map (role: role.id) definitions.roles
-        ++ builtins.concatLists (map (role: map (step: "${role.id}-${step.id}") role.steps) definitions.roles);
+        ++ builtins.concatLists (map (role: map (step: "${role.id}-${step.id}") role.steps) definitions.roles)
+        ++ moduleCheckNames;
       systems = [
         "x86_64-linux"
         "aarch64-linux"
@@ -25,6 +30,8 @@
     in
     {
       define = definitions;
+
+      inherit nixosModules;
 
       lib = {
         roles = definitions.roleMap;
@@ -48,7 +55,7 @@
           };
         in
         import ./checks {
-          inherit pkgs definitions packages;
+          inherit pkgs definitions packages nixosModules;
         }
       );
 

@@ -368,23 +368,251 @@ Outputs:
 
 ### OpenVPN Server Leaf
 
-Leaf certificate role intended for OpenVPN server identities.
+Leaf certificate role intended for OpenVPN server identities. This role prepares server key material and certificate signing requests, receives signed server certificates from the intermediate signing authority, assembles deployment-ready server bundles, and manages certificate rotation inputs for ongoing service operation. The server private key is intended to remain with the target host or other server-side secret storage appropriate for the deployment.
 
-TODO:
+#### 1. Create OpenVPN Server Leaf Request
 
-- Define subject and SAN requirements
-- Define server-specific extensions
-- Define packaging/output format
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as OpenVPN Server Leaf Workflow
+  participant Server as Server Deployment Environment
+
+  Operator->>Workflow: Provide server identity, SANs, policy, and deployment parameters
+  Workflow->>Server: Generate or import server private key
+  Server-->>Workflow: Return public key and storage metadata
+  Workflow-->>Operator: Return server CSR and issuance metadata
+```
+
+Inputs:
+
+- Server subject metadata such as common name or service identity
+- Requested subject alternative names such as DNS names or IP addresses
+- Server certificate profile, key usage, and extended key usage constraints
+- Key generation parameters and storage target information
+- Deployment metadata describing the OpenVPN server instance or environment
+
+Outputs:
+
+- Server private key material generated in the designated deployment environment, or a reference to non-exportable key storage
+- OpenVPN server certificate signing request
+- Subject and SAN manifest for review before issuance
+- Issuance request metadata for audit and downstream packaging
+
+#### 2. Package OpenVPN Server Deployment Bundle
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as OpenVPN Server Leaf Workflow
+  participant Bundle as Server Deployment Bundle
+
+  Operator->>Workflow: Provide signed server certificate, chain, revocation artifacts, and packaging parameters
+  Workflow->>Bundle: Assemble certificate, key reference, trust chain, and metadata
+  Bundle-->>Workflow: Return deployment bundle manifest
+  Workflow-->>Operator: Return deployment bundle and activation metadata
+```
+
+Inputs:
+
+- Signed OpenVPN server leaf certificate
+- Intermediate and root certificate chain
+- Current revocation artifacts needed by the server role
+- Server private key material or a reference to its storage location
+- Packaging requirements such as file layout, naming, and deployment metadata
+
+Outputs:
+
+- Deployment-ready OpenVPN server bundle
+- Server certificate and trust chain in the expected packaging format
+- Bundle manifest describing serial number, validity window, and subject alternative names
+- Activation metadata or configuration references for deployment automation
+
+#### 3. Rotate OpenVPN Server Certificate
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as OpenVPN Server Leaf Workflow
+  participant Server as Server Deployment Environment
+  participant Intermediate as Intermediate CA Workflow
+
+  Operator->>Workflow: Approve rotation window and replacement identity inputs
+  Workflow->>Server: Generate replacement key or reuse existing key per policy
+  Server-->>Workflow: Return replacement CSR inputs or key reference
+  Workflow->>Intermediate: Submit replacement server CSR for signing
+  Intermediate-->>Workflow: Return replacement server certificate and chain
+  Workflow-->>Operator: Return updated deployment bundle and retirement metadata
+```
+
+Inputs:
+
+- Existing server certificate and deployment metadata
+- New server subject or SAN inputs, if changed
+- Rotation policy indicating whether to rekey or reuse the existing key
+- Access to the server deployment environment and the intermediate signing workflow
+- Replacement validity period and activation window
+
+Outputs:
+
+- Replacement server private key material or a record that the existing key was reused
+- Replacement signed OpenVPN server certificate and chain
+- Updated deployment bundle and rollout metadata
+- Retirement record for the previous certificate and key material, if applicable
+
+#### 4. Consume Server Trust Updates
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Publish as Trust Artifact Publication
+  participant Workflow as OpenVPN Server Leaf Workflow
+  participant Server as Server Deployment Environment
+
+  Publish->>Workflow: Provide updated trust chain and revocation artifacts
+  Operator->>Workflow: Approve server trust update
+  Workflow->>Server: Stage updated trust material
+  Server-->>Workflow: Return trust update status
+  Workflow-->>Operator: Return trust update record
+```
+
+Inputs:
+
+- Current published root and intermediate trust bundle
+- Current revocation artifacts
+- Metadata describing the target server deployment environment
+- Update policy and activation window for trust changes
+
+Outputs:
+
+- Updated trust material for server-side certificate validation
+- Deployment record showing when the trust bundle changed
+- Status metadata indicating the active trust and revocation set
+- Inputs required for subsequent server bundle refreshes, if applicable
 
 ### OpenVPN Client Leaf
 
-Leaf certificate role intended for OpenVPN client identities.
+Leaf certificate role intended for OpenVPN client identities. This role prepares per-user or per-device key material and certificate signing requests, receives signed client certificates from the intermediate signing authority, assembles distribution-ready client credential bundles, and manages certificate rotation inputs for client access. The client private key is intended to remain on the endpoint device or in a user-held hardware token when that deployment model is used.
 
-TODO:
+#### 1. Create OpenVPN Client Leaf Request
 
-- Define subject naming approach
-- Define client-specific extensions
-- Define packaging/output format
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as OpenVPN Client Leaf Workflow
+  participant Client as Client Device or Token
+
+  Operator->>Workflow: Provide client identity, naming policy, and enrollment parameters
+  Workflow->>Client: Generate or import client private key
+  Client-->>Workflow: Return public key and storage metadata
+  Workflow-->>Operator: Return client CSR and issuance metadata
+```
+
+Inputs:
+
+- Client identity metadata such as user, device, or service account attributes
+- Subject naming policy inputs used to construct the client certificate subject
+- Client certificate profile, key usage, and extended key usage constraints
+- Key generation parameters and client-side storage target information
+- Enrollment metadata describing the client device, token, or distribution channel
+
+Outputs:
+
+- Client private key material generated on the endpoint or in the designated token, or a reference to non-exportable key storage
+- OpenVPN client certificate signing request
+- Identity manifest describing the requested subject and related client metadata
+- Issuance request metadata for audit and downstream packaging
+
+#### 2. Package OpenVPN Client Credential Bundle
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as OpenVPN Client Leaf Workflow
+  participant Bundle as Client Credential Bundle
+
+  Operator->>Workflow: Provide signed client certificate, chain, revocation artifacts, and distribution parameters
+  Workflow->>Bundle: Assemble certificate, key reference, trust chain, and client metadata
+  Bundle-->>Workflow: Return distribution bundle manifest
+  Workflow-->>Operator: Return client credential bundle and handoff metadata
+```
+
+Inputs:
+
+- Signed OpenVPN client leaf certificate
+- Intermediate and root certificate chain
+- Current revocation artifacts needed by the client role
+- Client private key material or a reference to its storage location
+- Distribution requirements such as archive format, file layout, and client configuration metadata
+
+Outputs:
+
+- Distribution-ready OpenVPN client credential bundle
+- Client certificate and trust chain in the expected packaging format
+- Bundle manifest describing serial number, validity window, and client identity metadata
+- Handoff metadata or configuration references for client onboarding
+
+#### 3. Rotate OpenVPN Client Certificate
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Workflow as OpenVPN Client Leaf Workflow
+  participant Client as Client Device or Token
+  participant Intermediate as Intermediate CA Workflow
+
+  Operator->>Workflow: Approve rotation window and replacement identity inputs
+  Workflow->>Client: Generate replacement key or reuse existing key per policy
+  Client-->>Workflow: Return replacement CSR inputs or key reference
+  Workflow->>Intermediate: Submit replacement client CSR for signing
+  Intermediate-->>Workflow: Return replacement client certificate and chain
+  Workflow-->>Operator: Return updated client bundle and retirement metadata
+```
+
+Inputs:
+
+- Existing client certificate and distribution metadata
+- New client identity or subject naming inputs, if changed
+- Rotation policy indicating whether to rekey or reuse the existing key
+- Access to the client device or token and the intermediate signing workflow
+- Replacement validity period and activation window
+
+Outputs:
+
+- Replacement client private key material or a record that the existing key was reused
+- Replacement signed OpenVPN client certificate and chain
+- Updated credential bundle and rollout metadata
+- Retirement record for the previous certificate and key material, if applicable
+
+#### 4. Consume Client Trust Updates
+
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant Publish as Trust Artifact Publication
+  participant Workflow as OpenVPN Client Leaf Workflow
+  participant Client as Client Device or Token
+
+  Publish->>Workflow: Provide updated trust chain and revocation artifacts
+  Operator->>Workflow: Approve client trust update
+  Workflow->>Client: Stage updated trust material
+  Client-->>Workflow: Return trust update status
+  Workflow-->>Operator: Return trust update record
+```
+
+Inputs:
+
+- Current published root and intermediate trust bundle
+- Current revocation artifacts
+- Metadata describing the target client device, token, or distribution channel
+- Update policy and activation window for trust changes
+
+Outputs:
+
+- Updated trust material for client-side certificate validation
+- Distribution record showing when the trust bundle changed
+- Status metadata indicating the active trust and revocation set
+- Inputs required for subsequent client bundle refreshes, if applicable
 
 ## Package Layout
 

@@ -12,6 +12,7 @@ let
     key = "${cfg.stateDir}/root-ca.key.pem";
     csr = "${cfg.stateDir}/root-ca.csr.pem";
     certificate = "${cfg.stateDir}/root-ca.cert.pem";
+    crl = "${cfg.stateDir}/crl.pem";
     metadata = "${cfg.stateDir}/root-ca.metadata.json";
   };
   initScript = pkgs.writeShellScript "pd-pki-root-certificate-authority-init" ''
@@ -25,10 +26,12 @@ let
     key_path=${lib.escapeShellArg runtimePaths.key}
     csr_path=${lib.escapeShellArg runtimePaths.csr}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
+    crl_path=${lib.escapeShellArg runtimePaths.crl}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
     key_source_path=${lib.escapeShellArg (if cfg.keySourcePath == null then "" else cfg.keySourcePath)}
     csr_source_path=${lib.escapeShellArg (if cfg.csrSourcePath == null then "" else cfg.csrSourcePath)}
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
+    crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
     metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
 
     mkdir -p ${lib.escapeShellArg runtimeDefaults.baseStateDir}
@@ -41,6 +44,7 @@ let
     copy_optional_artifact "$key_source_path" "$key_path" 600
     copy_optional_artifact "$csr_source_path" "$csr_path" 644
     copy_optional_artifact "$certificate_source_path" "$cert_path" 644
+    copy_optional_artifact "$crl_source_path" "$crl_path" 644
 
     if [ -n "$metadata_source_path" ]; then
       copy_optional_artifact "$metadata_source_path" "$metadata_path" 644
@@ -92,6 +96,14 @@ in
       default = null;
       description = ''
         Optional host path to an existing root certificate to stage into the runtime state directory.
+      '';
+    };
+
+    crlSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to a root-issued CRL to stage into the runtime state directory.
       '';
     };
 

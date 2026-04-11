@@ -49,6 +49,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
             keySourcePath = "${rootFixture}/root-ca.key.pem";
             csrSourcePath = "${rootFixture}/root-ca.csr.pem";
             certificateSourcePath = "${rootFixture}/root-ca.cert.pem";
+            crlSourcePath = "/var/lib/pd-pki/imports/root.crl.pem";
           };
           system.stateVersion = lib.mkDefault "24.11";
         };
@@ -64,7 +65,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
             pkgs.openssl
             packages.pd-pki-signing-tools
           ];
-          services.pd-pki.roles.intermediateSigningAuthority.enable = true;
+          services.pd-pki.roles.intermediateSigningAuthority = {
+            enable = true;
+            crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+          };
           system.stateVersion = lib.mkDefault "24.11";
         };
 
@@ -79,7 +83,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
             pkgs.jq
             packages.pd-pki-signing-tools
           ];
-          services.pd-pki.roles.openvpnServerLeaf.enable = true;
+          services.pd-pki.roles.openvpnServerLeaf = {
+            enable = true;
+            crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+          };
           system.stateVersion = lib.mkDefault "24.11";
         };
 
@@ -94,7 +101,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
             pkgs.jq
             packages.pd-pki-signing-tools
           ];
-          services.pd-pki.roles.openvpnClientLeaf.enable = true;
+          services.pd-pki.roles.openvpnClientLeaf = {
+            enable = true;
+            crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+          };
           system.stateVersion = lib.mkDefault "24.11";
         };
     };
@@ -119,11 +129,13 @@ if pkgs.stdenv.hostPlatform.isLinux then
         root_empty.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         root_empty.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.csr.pem")
         root_empty.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.cert.pem")
+        root_empty.succeed("test ! -e /var/lib/pd-pki/authorities/root/crl.pem")
         root_empty.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.metadata.json")
 
         root_imported.succeed("test -f /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         root_imported.succeed("test -f /var/lib/pd-pki/authorities/root/root-ca.csr.pem")
         root_imported.succeed("test -f /var/lib/pd-pki/authorities/root/root-ca.cert.pem")
+        root_imported.succeed("test ! -e /var/lib/pd-pki/authorities/root/crl.pem")
         root_imported.succeed("test -f /var/lib/pd-pki/authorities/root/root-ca.metadata.json")
         root_imported.succeed("test \"$(stat -c %a /var/lib/pd-pki/authorities/root/root-ca.key.pem)\" = 600")
         root_imported.succeed("case \"$(readlink -f /var/lib/pd-pki/authorities/root/root-ca.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
@@ -136,6 +148,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/signing-request.json")
         intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem")
         intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/chain.pem")
+        intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/crl.pem")
         intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/signer-metadata.json")
         intermediate.succeed("test \"$(stat -c %a /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem)\" = 600")
         intermediate.succeed("case \"$(readlink -f /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
@@ -149,6 +162,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/san-manifest.json")
         server.succeed("test ! -e /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem")
         server.succeed("test ! -e /var/lib/pd-pki/openvpn-server-leaf/chain.pem")
+        server.succeed("test ! -e /var/lib/pd-pki/openvpn-server-leaf/crl.pem")
         server.succeed("test ! -e /var/lib/pd-pki/openvpn-server-leaf/certificate-metadata.json")
         server.succeed("test \"$(stat -c %a /var/lib/pd-pki/openvpn-server-leaf/server.key.pem)\" = 600")
         server.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-server-leaf/server.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
@@ -162,6 +176,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/identity-manifest.json")
         client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/client.cert.pem")
         client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/chain.pem")
+        client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/crl.pem")
         client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json")
         client.succeed("test \"$(stat -c %a /var/lib/pd-pki/openvpn-client-leaf/client.key.pem)\" = 600")
         client.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-client-leaf/client.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
@@ -183,10 +198,21 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("jq -r '.subject' /var/lib/pd-pki/authorities/intermediate/signer-metadata.json | grep -F 'Pseudo Design Runtime Intermediate Signing Authority'")
         root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/serials/next-serial")
         root_imported.succeed("test \"$(cat /var/lib/pd-pki/signer-state/root/serials/next-serial)\" = 2")
-        root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/serials/allocated/1.json")
-        root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/issuances/1/issuance.json")
-        root_imported.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/root/issuances/1/issuance.json | grep -Fx 'issued'")
+        root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/serials/allocated/01.json")
+        root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/issuances/01/issuance.json")
+        root_imported.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/root/issuances/01/issuance.json | grep -Fx 'issued'")
         root_imported.succeed("test \"$(find /var/lib/pd-pki/signer-state/root/requests -maxdepth 1 -name '*.json' | wc -l | tr -d '[:space:]')\" = 1")
+        root_imported.succeed("pd-pki-signing-tools generate-crl --signer-state-dir /var/lib/pd-pki/signer-state/root --issuer-key /var/lib/pd-pki/authorities/root/root-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/root/root-ca.cert.pem --out-dir /tmp/root-crl --days 30")
+        root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/crls/current.pem")
+        root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/crls/metadata.json")
+        root_imported.succeed("jq -r '.crlNumber' /var/lib/pd-pki/signer-state/root/crls/metadata.json | grep -Fx '01'")
+        root_imported.succeed("test \"$(jq '.revokedSerials | length' /var/lib/pd-pki/signer-state/root/crls/metadata.json)\" = 0")
+        root_imported.succeed("mkdir -p /var/lib/pd-pki/imports")
+        root_imported.succeed("cp /tmp/root-crl/crl.pem /var/lib/pd-pki/imports/root.crl.pem")
+        root_imported.succeed("systemctl restart pd-pki-root-certificate-authority-init.service")
+        root_imported.wait_for_unit("pd-pki-root-certificate-authority-init.service")
+        root_imported.succeed("test -f /var/lib/pd-pki/authorities/root/crl.pem")
+        root_imported.succeed("openssl crl -in /var/lib/pd-pki/authorities/root/crl.pem -noout >/dev/null")
 
         server.succeed("pd-pki-signing-tools export-request --role openvpn-server-leaf --state-dir /var/lib/pd-pki/openvpn-server-leaf --out-dir /tmp/server-request")
         server.copy_from_vm("/tmp/server-request")
@@ -215,18 +241,49 @@ if pkgs.stdenv.hostPlatform.isLinux then
         client.succeed("jq -r '.subject' /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json | grep -F 'client-01.pseudo.test'")
         intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/next-serial")
         intermediate.succeed("test \"$(cat /var/lib/pd-pki/signer-state/intermediate/serials/next-serial)\" = 3")
-        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/allocated/1.json")
-        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/allocated/2.json")
-        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/issuances/1/issuance.json")
-        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/issuances/2/issuance.json")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/allocated/01.json")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/allocated/02.json")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/issuances/01/issuance.json")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/issuances/02/issuance.json")
         intermediate.succeed("test \"$(find /var/lib/pd-pki/signer-state/intermediate/requests -maxdepth 1 -name '*.json' | wc -l | tr -d '[:space:]')\" = 2")
-        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/1/issuance.json | grep -Fx 'issued'")
-        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/2/issuance.json | grep -Fx 'issued'")
+        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/01/issuance.json | grep -Fx 'issued'")
+        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/02/issuance.json | grep -Fx 'issued'")
         intermediate.succeed("pd-pki-signing-tools revoke-issued --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --serial 2 --reason keyCompromise")
-        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/revocations/2.json")
-        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/2/issuance.json | grep -Fx 'revoked'")
-        intermediate.succeed("jq -r '.reason' /var/lib/pd-pki/signer-state/intermediate/revocations/2.json | grep -Fx 'keyCompromise'")
-        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/serials/allocated/2.json | grep -Fx 'revoked'")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/revocations/02.json")
+        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/02/issuance.json | grep -Fx 'revoked'")
+        intermediate.succeed("jq -r '.reason' /var/lib/pd-pki/signer-state/intermediate/revocations/02.json | grep -Fx 'keyCompromise'")
+        intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/serials/allocated/02.json | grep -Fx 'revoked'")
+        intermediate.succeed("pd-pki-signing-tools generate-crl --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --out-dir /tmp/intermediate-crl --days 30")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/crls/current.pem")
+        intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/crls/metadata.json")
+        intermediate.succeed("jq -r '.crlNumber' /var/lib/pd-pki/signer-state/intermediate/crls/metadata.json | grep -Fx '01'")
+        intermediate.succeed("jq -r '.revokedSerials[0]' /var/lib/pd-pki/signer-state/intermediate/crls/metadata.json | grep -Fx '02'")
+        intermediate.succeed("openssl crl -in /var/lib/pd-pki/signer-state/intermediate/crls/current.pem -noout -text | grep -F 'Serial Number: 02'")
+        intermediate.succeed("mkdir -p /var/lib/pd-pki/imports")
+        intermediate.succeed("cp /tmp/intermediate-crl/crl.pem /var/lib/pd-pki/imports/intermediate.crl.pem")
+        intermediate.succeed("systemctl restart pd-pki-intermediate-signing-authority-init.service")
+        intermediate.wait_for_unit("pd-pki-intermediate-signing-authority-init.service")
+        intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/crl.pem")
+        intermediate.succeed("openssl crl -in /var/lib/pd-pki/authorities/intermediate/crl.pem -noout >/dev/null")
+
+        intermediate.copy_from_vm("/tmp/intermediate-crl")
+        server.copy_from_host(str(Path(out_dir, "intermediate-crl")), "/tmp/intermediate-crl")
+        client.copy_from_host(str(Path(out_dir, "intermediate-crl")), "/tmp/intermediate-crl")
+        server.succeed("mkdir -p /var/lib/pd-pki/imports")
+        server.succeed("cp /tmp/intermediate-crl/crl.pem /var/lib/pd-pki/imports/intermediate.crl.pem")
+        server.succeed("systemctl restart pd-pki-openvpn-server-leaf-init.service")
+        server.wait_for_unit("pd-pki-openvpn-server-leaf-init.service")
+        server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/crl.pem")
+        server.succeed("openssl crl -in /var/lib/pd-pki/openvpn-server-leaf/crl.pem -noout >/dev/null")
+        server.succeed("openssl verify -crl_check -CAfile /var/lib/pd-pki/openvpn-server-leaf/chain.pem -CRLfile /var/lib/pd-pki/openvpn-server-leaf/crl.pem /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem >/dev/null")
+
+        client.succeed("mkdir -p /var/lib/pd-pki/imports")
+        client.succeed("cp /tmp/intermediate-crl/crl.pem /var/lib/pd-pki/imports/intermediate.crl.pem")
+        client.succeed("systemctl restart pd-pki-openvpn-client-leaf-init.service")
+        client.wait_for_unit("pd-pki-openvpn-client-leaf-init.service")
+        client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/crl.pem")
+        client.succeed("openssl crl -in /var/lib/pd-pki/openvpn-client-leaf/crl.pem -noout >/dev/null")
+        client.succeed("if openssl verify -crl_check -CAfile /var/lib/pd-pki/openvpn-client-leaf/chain.pem -CRLfile /var/lib/pd-pki/openvpn-client-leaf/crl.pem /var/lib/pd-pki/openvpn-client-leaf/client.cert.pem >/dev/null 2>&1; then exit 1; else exit 0; fi")
       '';
   }
 else

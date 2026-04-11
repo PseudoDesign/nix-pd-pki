@@ -83,9 +83,62 @@ pkgs.writeShellApplication {
       date -u +"%Y-%m-%dT%H:%M:%SZ"
     }
 
+    canonicalize_hex_serial() {
+      local serial="$1"
+
+      serial="''${serial#0x}"
+      serial="''${serial#0X}"
+      serial="$(printf '%s' "$serial" | tr '[:lower:]' '[:upper:]')"
+      [ -n "$serial" ] || die "Serial value is empty"
+      case "$serial" in
+        *[!0-9A-F]*) die "Serial value must be hexadecimal" ;;
+      esac
+      if [ $((''${#serial} % 2)) -ne 0 ]; then
+        serial="0$serial"
+      fi
+      printf '%s\n' "$serial"
+    }
+
+    decimal_serial_to_hex() {
+      local serial="$1"
+
+      [ -n "$serial" ] || die "Serial value is empty"
+      case "$serial" in
+        *[!0-9]*) die "Serial value must be an unsigned decimal integer" ;;
+      esac
+      canonicalize_hex_serial "$(printf '%X' "$serial")"
+    }
+
+    validate_crl_reason() {
+      local reason="$1"
+      case "$reason" in
+        unspecified|keyCompromise|CACompromise|affiliationChanged|superseded|cessationOfOperation|certificateHold|removeFromCRL|privilegeWithdrawn|AACompromise)
+          ;;
+        *)
+          die "Invalid CRL reason: $reason"
+          ;;
+      esac
+    }
+
+    crl_last_update() {
+      local crl_path="$1"
+      openssl crl -in "$crl_path" -noout -lastupdate | cut -d= -f2-
+    }
+
+    crl_next_update() {
+      local crl_path="$1"
+      openssl crl -in "$crl_path" -noout -nextupdate | cut -d= -f2-
+    }
+
+    crl_number() {
+      local crl_path="$1"
+      canonicalize_hex_serial "$(openssl crl -in "$crl_path" -noout -crlnumber | cut -d= -f2-)"
+    }
+
     signer_state_init() {
       local state_dir="$1"
       mkdir -p \
+        "$state_dir/crls" \
         "$state_dir/issuances" \
         "$state_dir/requests" \
         "$state_dir/revocations" \
@@ -93,6 +146,10 @@ pkgs.writeShellApplication {
 
       if [ ! -f "$state_dir/serials/next-serial" ]; then
         printf '%s\n' "1" > "$state_dir/serials/next-serial"
+      fi
+
+      if [ ! -f "$state_dir/crls/next-crl-number" ]; then
+        printf '%s\n' "01" > "$state_dir/crls/next-crl-number"
       fi
     }
 
@@ -123,6 +180,45 @@ pkgs.writeShellApplication {
       local state_dir="$1"
       local serial="$2"
       printf '%s\n' "$state_dir/revocations/$serial.json"
+    }
+
+    signer_state_current_crl_path() {
+      local state_dir="$1"
+      printf '%s\n' "$state_dir/crls/current.pem"
+    }
+
+    signer_state_crl_metadata_path() {
+      local state_dir="$1"
+      printf '%s\n' "$state_dir/crls/metadata.json"
+    }
+
+    signer_state_next_crl_number_path() {
+      local state_dir="$1"
+      printf '%s\n' "$state_dir/crls/next-crl-number"
+    }
+
+    signer_state_resolve_serial() {
+      local state_dir="$1"
+      local serial="$2"
+      local candidate=""
+
+      if [ -d "$(signer_state_issuance_dir "$state_dir" "$serial")" ] || [ -f "$(signer_state_serial_record_path "$state_dir" "$serial")" ] || [ -f "$(signer_state_revocation_record_path "$state_dir" "$serial")" ]; then
+        printf '%s\n' "$serial"
+        return
+      fi
+
+      [ -n "$serial" ] || die "Serial value is empty"
+      case "$serial" in
+        *[!0-9]* ) candidate="$(canonicalize_hex_serial "$serial")" ;;
+        * ) candidate="$(decimal_serial_to_hex "$serial")" ;;
+      esac
+
+      if [ -d "$(signer_state_issuance_dir "$state_dir" "$candidate")" ] || [ -f "$(signer_state_serial_record_path "$state_dir" "$candidate")" ] || [ -f "$(signer_state_revocation_record_path "$state_dir" "$candidate")" ]; then
+        printf '%s\n' "$candidate"
+        return
+      fi
+
+      die "Unknown serial in signer state: $serial"
     }
 
     request_id_for_bundle() {
@@ -240,12 +336,45 @@ pkgs.writeShellApplication {
         }' > "$target"
     }
 
+    write_crl_metadata() {
+      local target="$1"
+      local crl_path="$2"
+      local issuer_cert="$3"
+      local signer_state_dir="$4"
+      local revoked_serials_json
+
+      revoked_serials_json="$(
+        find "$signer_state_dir/revocations" -maxdepth 1 -name '*.json' -type f -print | sort | while IFS= read -r record_path; do
+          jq -r '.serial // empty' "$record_path"
+        done | jq -R . | jq -s .
+      )"
+
+      jq -n \
+        --arg schemaVersion "1" \
+        --arg issuerSubject "$(certificate_subject "$issuer_cert")" \
+        --arg issuerFingerprint "$(certificate_fingerprint "$issuer_cert")" \
+        --arg crlNumber "$(crl_number "$crl_path")" \
+        --arg lastUpdate "$(crl_last_update "$crl_path")" \
+        --arg nextUpdate "$(crl_next_update "$crl_path")" \
+        --argjson revokedSerials "$revoked_serials_json" \
+        '{
+          schemaVersion: ($schemaVersion | tonumber),
+          issuerSubject: $issuerSubject,
+          issuerSha256Fingerprint: $issuerFingerprint,
+          crlNumber: $crlNumber,
+          lastUpdate: $lastUpdate,
+          nextUpdate: $nextUpdate,
+          revokedSerials: $revokedSerials
+        }' > "$target"
+    }
+
     usage() {
       cat <<'EOF' >&2
 Usage:
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
   pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
+  pd-pki-signing-tools generate-crl --signer-state-dir DIR --issuer-key PATH --issuer-cert PATH --out-dir DIR [--days DAYS]
   pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON]
 EOF
     }
@@ -389,6 +518,7 @@ EOF
       local basename
       local csr_file
       local csr_path
+      local cert_serial=""
       local request_id=""
       local request_record_path=""
       local issuance_dir=""
@@ -472,13 +602,14 @@ EOF
 
       bundle_profile="$(metadata_profile_for_signed_bundle "$role")"
       write_certificate_metadata "$out_dir/$basename.cert.pem" "$out_dir/metadata.json" "$bundle_profile"
+      cert_serial="$(certificate_serial "$out_dir/$basename.cert.pem")"
       cp "$request_file" "$out_dir/request.json"
       openssl verify -CAfile "$out_dir/chain.pem" "$out_dir/$basename.cert.pem" >/dev/null
 
       if [ -n "$signer_state_dir" ]; then
         local issued_at
         issued_at="$(current_timestamp_utc)"
-        issuance_dir="$(signer_state_issuance_dir "$signer_state_dir" "$serial")"
+        issuance_dir="$(signer_state_issuance_dir "$signer_state_dir" "$cert_serial")"
         mkdir -p "$issuance_dir"
         cp "$request_file" "$issuance_dir/request.json"
         cp "$csr_path" "$issuance_dir/$csr_file"
@@ -491,9 +622,9 @@ EOF
         if [ -f "$request_dir/identity-manifest.json" ]; then
           cp "$request_dir/identity-manifest.json" "$issuance_dir/identity-manifest.json"
         fi
-        write_request_record "$request_record_path" "$request_id" "$request_file" "$serial" "$issued_at"
-        write_serial_record "$(signer_state_serial_record_path "$signer_state_dir" "$serial")" "$serial" "$request_id" "$issued_at"
-        write_issuance_record "$issuance_dir/issuance.json" "$serial" "$request_id" "$request_file" "$out_dir/metadata.json" "$issuer_cert" "$issued_at"
+        write_request_record "$request_record_path" "$request_id" "$request_file" "$cert_serial" "$issued_at"
+        write_serial_record "$(signer_state_serial_record_path "$signer_state_dir" "$cert_serial")" "$cert_serial" "$request_id" "$issued_at"
+        write_issuance_record "$issuance_dir/issuance.json" "$cert_serial" "$request_id" "$request_file" "$out_dir/metadata.json" "$issuer_cert" "$issued_at"
       fi
     }
 
@@ -589,6 +720,164 @@ EOF
       fi
     }
 
+    generate_crl() {
+      local signer_state_dir=""
+      local issuer_key=""
+      local issuer_cert=""
+      local out_dir=""
+      local days="7"
+
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --signer-state-dir)
+            signer_state_dir="$2"
+            shift 2
+            ;;
+          --issuer-key)
+            issuer_key="$2"
+            shift 2
+            ;;
+          --issuer-cert)
+            issuer_cert="$2"
+            shift 2
+            ;;
+          --out-dir)
+            out_dir="$2"
+            shift 2
+            ;;
+          --days)
+            days="$2"
+            shift 2
+            ;;
+          *)
+            die "Unknown generate-crl argument: $1"
+            ;;
+        esac
+      done
+
+      [ -n "$signer_state_dir" ] || die "--signer-state-dir is required"
+      [ -n "$issuer_key" ] || die "--issuer-key is required"
+      [ -n "$issuer_cert" ] || die "--issuer-cert is required"
+      [ -n "$out_dir" ] || die "--out-dir is required"
+      require_dir "$signer_state_dir"
+      require_file "$issuer_key"
+      require_file "$issuer_cert"
+      signer_matches_key "$issuer_key" "$issuer_cert" || die "Issuer certificate does not match issuer private key"
+
+      signer_state_init "$signer_state_dir"
+
+      local state_crl_path
+      local state_crl_metadata_path
+      local state_next_crl_number_path
+      local crl_workdir
+      local config_path
+      local crl_number_seed
+
+      state_crl_path="$(signer_state_current_crl_path "$signer_state_dir")"
+      state_crl_metadata_path="$(signer_state_crl_metadata_path "$signer_state_dir")"
+      state_next_crl_number_path="$(signer_state_next_crl_number_path "$signer_state_dir")"
+      crl_workdir="$(mktemp -d)"
+
+      mkdir -p "$out_dir"
+      mkdir -p "$crl_workdir/newcerts"
+      : > "$crl_workdir/index.txt"
+      printf '%s\n' "unique_subject = no" > "$crl_workdir/index.txt.attr"
+      printf '%s\n' "01" > "$crl_workdir/serial"
+      crl_number_seed="$(tr -d '[:space:]' < "$state_next_crl_number_path")"
+      printf '%s\n' "$(canonicalize_hex_serial "$crl_number_seed")" > "$crl_workdir/crlnumber"
+
+      config_path="$crl_workdir/openssl.cnf"
+      cat > "$config_path" <<EOF
+[ ca ]
+default_ca = crl_ca
+
+[ crl_ca ]
+database = $crl_workdir/index.txt
+new_certs_dir = $crl_workdir/newcerts
+certificate = $issuer_cert
+private_key = $issuer_key
+serial = $crl_workdir/serial
+crlnumber = $crl_workdir/crlnumber
+default_md = sha256
+default_days = 365
+default_crl_days = $days
+unique_subject = no
+policy = policy_any
+copy_extensions = copy
+crl_extensions = crl_ext
+
+[ policy_any ]
+commonName = supplied
+stateOrProvinceName = optional
+countryName = optional
+organizationName = optional
+organizationalUnitName = optional
+emailAddress = optional
+
+[ crl_ext ]
+authorityKeyIdentifier = keyid:always
+EOF
+
+      if [ -d "$signer_state_dir/issuances" ]; then
+        local issuance_dir
+        for issuance_dir in "$signer_state_dir"/issuances/*; do
+          [ -d "$issuance_dir" ] || continue
+          local issuance_record
+          local serial
+          local basename
+          local cert_path
+
+          issuance_record="$issuance_dir/issuance.json"
+          require_file "$issuance_record"
+          serial="$(jq -r '.serial // empty' "$issuance_record")"
+          basename="$(jq -r '.request.basename // empty' "$issuance_record")"
+          [ -n "$serial" ] || die "Issuance record is missing serial: $issuance_record"
+          [ -n "$basename" ] || die "Issuance record is missing request.basename: $issuance_record"
+          cert_path="$issuance_dir/$basename.cert.pem"
+          require_file "$cert_path"
+          cp "$cert_path" "$crl_workdir/newcerts/$serial.pem"
+          openssl ca -config "$config_path" -batch -valid "$cert_path" >/dev/null 2>&1
+        done
+      fi
+
+      if [ -d "$signer_state_dir/revocations" ]; then
+        local revocation_path
+        for revocation_path in "$signer_state_dir"/revocations/*.json; do
+          [ -f "$revocation_path" ] || continue
+          local serial
+          local reason
+          local issuance_dir
+          local issuance_record
+          local basename
+          local cert_path
+
+          serial="$(jq -r '.serial // empty' "$revocation_path")"
+          reason="$(jq -r '.reason // "unspecified"' "$revocation_path")"
+          [ -n "$serial" ] || die "Revocation record is missing serial: $revocation_path"
+          validate_crl_reason "$reason"
+          issuance_dir="$(signer_state_issuance_dir "$signer_state_dir" "$serial")"
+          issuance_record="$issuance_dir/issuance.json"
+          require_file "$issuance_record"
+          basename="$(jq -r '.request.basename // empty' "$issuance_record")"
+          [ -n "$basename" ] || die "Issuance record is missing request.basename: $issuance_record"
+          cert_path="$issuance_dir/$basename.cert.pem"
+          require_file "$cert_path"
+          openssl ca -config "$config_path" -batch -revoke "$cert_path" -crl_reason "$reason" >/dev/null 2>&1
+        done
+      fi
+
+      openssl ca -config "$config_path" -batch -gencrl -out "$state_crl_path" -crldays "$days" >/dev/null 2>&1
+      chmod 644 "$state_crl_path"
+      cp "$crl_workdir/crlnumber" "$state_next_crl_number_path"
+      write_crl_metadata "$state_crl_metadata_path" "$state_crl_path" "$issuer_cert" "$signer_state_dir"
+      chmod 644 "$state_crl_metadata_path"
+      cp "$state_crl_path" "$out_dir/crl.pem"
+      chmod 644 "$out_dir/crl.pem"
+      cp "$state_crl_metadata_path" "$out_dir/metadata.json"
+      chmod 644 "$out_dir/metadata.json"
+      rm -rf "$crl_workdir"
+    }
+
     revoke_issued() {
       local signer_state_dir=""
       local serial=""
@@ -617,6 +906,8 @@ EOF
       [ -n "$signer_state_dir" ] || die "--signer-state-dir is required"
       [ -n "$serial" ] || die "--serial is required"
       require_dir "$signer_state_dir"
+      serial="$(signer_state_resolve_serial "$signer_state_dir" "$serial")"
+      validate_crl_reason "$reason"
 
       local issuance_dir
       local issuance_record_path
@@ -707,6 +998,9 @@ EOF
         ;;
       import-signed)
         import_signed "$@"
+        ;;
+      generate-crl)
+        generate_crl "$@"
         ;;
       revoke-issued)
         revoke_issued "$@"

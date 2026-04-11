@@ -11,7 +11,7 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 31 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
 - NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki` without bootstrapping a CA hierarchy on deployment nodes
-- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, and can persist signer-side issuance state with automatic serial allocation and revocation metadata
+- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, persists signer-side issuance state with automatic serial allocation, and can generate CRLs from recorded revocations
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## What This Repository Is Today
@@ -37,7 +37,7 @@ This repo is still test-oriented rather than production-ready PKI automation:
 
 - private keys used for runtime services are generated in software under `/var/lib/pd-pki`; they are not hardware-backed or escrowed
 - root and intermediate hardware-backed flows are simulated, not integrated with YubiKey or HSM hardware
-- revocation is represented as JSON metadata, not CRLs or OCSP
+- signer-side and runtime CRL flows are implemented, but there is still no OCSP responder or distribution service
 - issuance inputs are fixed representative values baked into the derivations today
 - role packages still model certificate authorities as deterministic fixtures rather than an offline or HSM-backed production signing workflow
 
@@ -152,6 +152,7 @@ Representative artifact types currently include:
 - self-signed and issued X.509 certificates
 - CSRs
 - certificate chains
+- CRLs
 - deployment and credential bundles
 - trust bundle directories
 - JSON manifests, issuance metadata, revocation records, and publication metadata
@@ -169,7 +170,7 @@ Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
 - server and client extended key usage validation
 - SAN presence checks
 - NixOS module evaluation
-- Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, and import signed certificates without bootstrapping a CA chain
+- Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, import signed certificates without bootstrapping a CA chain, generate and stage CRLs, and enforce revocation with `openssl verify -crl_check`
 
 The Linux-only [`role-topology` check](/home/adam/pd-pki/checks/nixos-role-topology.nix) adds a multi-node NixOS test on top of the direct derivation-based role and step checks exported on every supported system.
 
@@ -183,10 +184,10 @@ Each role has a NixOS module built from [`modules/mk-role-module.nix`](/home/ada
 
 Each role module now has a single runtime behavior:
 
-- `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root key, CSR, certificate, and optional metadata into mutable runtime paths.
-- `services.pd-pki.roles.intermediateSigningAuthority` generates a local CA key and CSR, writes `signing-request.json`, then stages an imported intermediate certificate, chain, and optional metadata.
-- `services.pd-pki.roles.openvpnServerLeaf` generates a local key and CSR, writes `issuance-request.json` plus `san-manifest.json`, then stages an imported server certificate, chain, and optional metadata.
-- `services.pd-pki.roles.openvpnClientLeaf` generates a local key and CSR, writes `issuance-request.json` plus `identity-manifest.json`, then stages an imported client certificate, chain, and optional metadata.
+- `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root key, CSR, certificate, optional CRL, and optional metadata into mutable runtime paths.
+- `services.pd-pki.roles.intermediateSigningAuthority` generates a local CA key and CSR, writes `signing-request.json`, then stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnServerLeaf` generates a local key and CSR, writes `issuance-request.json` plus `san-manifest.json`, then stages an imported server certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnClientLeaf` generates a local key and CSR, writes `issuance-request.json` plus `identity-manifest.json`, then stages an imported client certificate, chain, issuer CRL, and optional metadata.
 
 Available option paths are:
 
@@ -205,12 +206,14 @@ Example:
     enable = true;
     certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/server.chain.pem";
+    crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
   };
 
   services.pd-pki.roles.openvpnClientLeaf = {
     enable = true;
     certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
+    crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
   };
 }
 ```
@@ -262,6 +265,10 @@ When `sign-request` runs with `--signer-state-dir`, it allocates the next serial
 
 ```text
 <signer-state-dir>/
+├── crls/
+│   ├── current.pem
+│   ├── metadata.json
+│   └── next-crl-number
 ├── issuances/
 │   └── <serial>/
 │       ├── issuance.json
@@ -291,6 +298,19 @@ pd-pki-signing-tools revoke-issued \
 ```
 
 That updates the issuance, request, and serial records to `status = "revoked"` and writes a matching revocation record under `revocations/`.
+
+To generate a CRL from the recorded signer state:
+
+```bash
+pd-pki-signing-tools generate-crl \
+  --signer-state-dir /secure/issuer/state/intermediate \
+  --issuer-key /secure/issuer/intermediate-ca.key.pem \
+  --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
+  --out-dir /tmp/intermediate-crl \
+  --days 30
+```
+
+That writes `crl.pem` and `metadata.json` into `--out-dir`, updates `<signer-state-dir>/crls/`, and lets deployment nodes stage the resulting CRL through `crlSourcePath`.
 
 Exported request bundles always include `request.json`, the canonical CSR filename for the role, and any role-specific manifest such as `san-manifest.json` or `identity-manifest.json`. Signed bundles contain the issued certificate, `chain.pem`, `metadata.json`, and a copy of the normalized `request.json`.
 

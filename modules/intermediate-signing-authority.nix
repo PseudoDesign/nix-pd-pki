@@ -14,6 +14,7 @@ let
     request = "${cfg.stateDir}/signing-request.json";
     certificate = "${cfg.stateDir}/intermediate-ca.cert.pem";
     chain = "${cfg.stateDir}/chain.pem";
+    crl = "${cfg.stateDir}/crl.pem";
     metadata = "${cfg.stateDir}/signer-metadata.json";
   };
   initScript = pkgs.writeShellScript "pd-pki-intermediate-signing-authority-init" ''
@@ -29,9 +30,11 @@ let
     request_path=${lib.escapeShellArg runtimePaths.request}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
     chain_path=${lib.escapeShellArg runtimePaths.chain}
+    crl_path=${lib.escapeShellArg runtimePaths.crl}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
     chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
+    crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
     metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
 
     intermediate_workdir=""
@@ -85,6 +88,7 @@ let
 
     copy_optional_artifact "$certificate_source_path" "$cert_path" 644
     copy_optional_artifact "$chain_source_path" "$chain_path" 644
+    copy_optional_artifact "$crl_source_path" "$crl_path" 644
 
     if [ -n "$metadata_source_path" ]; then
       copy_optional_artifact "$metadata_source_path" "$metadata_path" 644
@@ -144,6 +148,15 @@ in
       default = null;
       description = ''
         Optional host path to an intermediate certificate chain to stage into the runtime state
+        directory.
+      '';
+    };
+
+    crlSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an intermediate-issued CRL to stage into the runtime state
         directory.
       '';
     };

@@ -45,7 +45,7 @@ copy_optional_artifact() {
   local target_path="$2"
   local mode="$3"
 
-  if [ -n "$source_path" ]; then
+  if [ -n "$source_path" ] && [ -f "$source_path" ]; then
     cp "$source_path" "$target_path"
     chmod "$mode" "$target_path"
   fi

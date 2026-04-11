@@ -67,7 +67,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.intermediateSigningAuthority = {
             enable = true;
+            certificateSourcePath = "/var/lib/pd-pki/imports/intermediate.cert.pem";
+            chainSourcePath = "/var/lib/pd-pki/imports/intermediate.chain.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+            metadataSourcePath = "/var/lib/pd-pki/imports/intermediate.metadata.json";
           };
           system.stateVersion = lib.mkDefault "24.11";
         };
@@ -85,7 +88,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnServerLeaf = {
             enable = true;
+            certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
+            chainSourcePath = "/var/lib/pd-pki/imports/server.chain.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+            metadataSourcePath = "/var/lib/pd-pki/imports/server.metadata.json";
           };
           system.stateVersion = lib.mkDefault "24.11";
         };
@@ -103,7 +109,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnClientLeaf = {
             enable = true;
+            certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
+            chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+            metadataSourcePath = "/var/lib/pd-pki/imports/client.metadata.json";
           };
           system.stateVersion = lib.mkDefault "24.11";
         };
@@ -235,7 +244,12 @@ if pkgs.stdenv.hostPlatform.isLinux then
         root_imported.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/intermediate-request --out-dir /tmp/intermediate-signed --issuer-key /var/lib/pd-pki/authorities/root/root-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/root/root-ca.cert.pem --signer-state-dir /var/lib/pd-pki/signer-state/root --policy-file /tmp/root-policy.json")
         root_imported.copy_from_vm("/tmp/intermediate-signed")
         intermediate.copy_from_host(str(Path(out_dir, "intermediate-signed")), "/tmp/intermediate-signed")
-        intermediate.succeed("pd-pki-signing-tools import-signed --role intermediate-signing-authority --state-dir /var/lib/pd-pki/authorities/intermediate --signed-dir /tmp/intermediate-signed")
+        intermediate.succeed("mkdir -p /var/lib/pd-pki/imports")
+        intermediate.succeed("cp /tmp/intermediate-signed/intermediate-ca.cert.pem /var/lib/pd-pki/imports/intermediate.cert.pem")
+        intermediate.succeed("cp /tmp/intermediate-signed/chain.pem /var/lib/pd-pki/imports/intermediate.chain.pem")
+        intermediate.succeed("cp /tmp/intermediate-signed/metadata.json /var/lib/pd-pki/imports/intermediate.metadata.json")
+        intermediate.succeed("systemctl restart pd-pki-intermediate-signing-authority-init.service")
+        intermediate.wait_for_unit("pd-pki-intermediate-signing-authority-init.service")
         intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem")
         intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/chain.pem")
         intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/signer-metadata.json")
@@ -295,7 +309,12 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("test \"$(find /var/lib/pd-pki/signer-state/intermediate/issuances -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')\" = 1")
         intermediate.copy_from_vm("/tmp/server-signed-a")
         server.copy_from_host(str(Path(out_dir, "server-signed-a")), "/tmp/server-signed")
-        server.succeed("pd-pki-signing-tools import-signed --role openvpn-server-leaf --state-dir /var/lib/pd-pki/openvpn-server-leaf --signed-dir /tmp/server-signed")
+        server.succeed("mkdir -p /var/lib/pd-pki/imports")
+        server.succeed("cp /tmp/server-signed/server.cert.pem /var/lib/pd-pki/imports/server.cert.pem")
+        server.succeed("cp /tmp/server-signed/chain.pem /var/lib/pd-pki/imports/server.chain.pem")
+        server.succeed("cp /tmp/server-signed/metadata.json /var/lib/pd-pki/imports/server.metadata.json")
+        server.succeed("systemctl restart pd-pki-openvpn-server-leaf-init.service")
+        server.wait_for_unit("pd-pki-openvpn-server-leaf-init.service")
         server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem")
         server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/chain.pem")
         server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/certificate-metadata.json")
@@ -311,12 +330,42 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/client-request --out-dir /tmp/client-signed --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --policy-file /tmp/intermediate-policy.json")
         intermediate.copy_from_vm("/tmp/client-signed")
         client.copy_from_host(str(Path(out_dir, "client-signed")), "/tmp/client-signed")
-        client.succeed("pd-pki-signing-tools import-signed --role openvpn-client-leaf --state-dir /var/lib/pd-pki/openvpn-client-leaf --signed-dir /tmp/client-signed")
+        client.succeed("mkdir -p /var/lib/pd-pki/imports")
+        client.succeed("cp /tmp/client-signed/client.cert.pem /var/lib/pd-pki/imports/client.cert.pem")
+        client.succeed("cp /tmp/client-signed/chain.pem /var/lib/pd-pki/imports/client.chain.pem")
+        client.succeed("cp /tmp/client-signed/metadata.json /var/lib/pd-pki/imports/client.metadata.json")
+        client.succeed("systemctl restart pd-pki-openvpn-client-leaf-init.service")
+        client.wait_for_unit("pd-pki-openvpn-client-leaf-init.service")
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/client.cert.pem")
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/chain.pem")
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json")
         client.succeed("openssl verify -CAfile /var/lib/pd-pki/openvpn-client-leaf/chain.pem /var/lib/pd-pki/openvpn-client-leaf/client.cert.pem >/dev/null")
         client.succeed("jq -r '.subject' /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json | grep -F 'client-01.pseudo.test'")
+        server_cert_fingerprint = server.succeed("openssl x509 -in /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem -noout -fingerprint -sha256 | cut -d= -f2").strip()
+        server.copy_from_host(str(Path(out_dir, "client-signed")), "/tmp/client-signed-bad")
+        server.succeed("cp /tmp/client-signed-bad/client.cert.pem /var/lib/pd-pki/imports/server.cert.pem")
+        server.succeed("cp /tmp/client-signed-bad/chain.pem /var/lib/pd-pki/imports/server.chain.pem")
+        server.succeed("cp /tmp/client-signed-bad/metadata.json /var/lib/pd-pki/imports/server.metadata.json")
+        server.succeed("if systemctl restart pd-pki-openvpn-server-leaf-init.service; then exit 1; else exit 0; fi")
+        server.succeed("systemctl is-failed --quiet pd-pki-openvpn-server-leaf-init.service")
+        server.succeed(f'test "$(openssl x509 -in /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem -noout -fingerprint -sha256 | cut -d= -f2)" = "{server_cert_fingerprint}"')
+        server.succeed("cp /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem /var/lib/pd-pki/imports/server.cert.pem")
+        server.succeed("cp /var/lib/pd-pki/openvpn-server-leaf/chain.pem /var/lib/pd-pki/imports/server.chain.pem")
+        server.succeed("cp /var/lib/pd-pki/openvpn-server-leaf/certificate-metadata.json /var/lib/pd-pki/imports/server.metadata.json")
+        server.succeed("systemctl reset-failed pd-pki-openvpn-server-leaf-init.service")
+        server.succeed("systemctl restart pd-pki-openvpn-server-leaf-init.service")
+        server.wait_for_unit("pd-pki-openvpn-server-leaf-init.service")
+        client_metadata_subject = client.succeed("jq -r '.subject' /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json").strip()
+        client.succeed("tmp_metadata=$(mktemp) && jq '.subject = \"CN=Incorrect Runtime Subject\"' /var/lib/pd-pki/imports/client.metadata.json > \"$tmp_metadata\" && mv \"$tmp_metadata\" /var/lib/pd-pki/imports/client.metadata.json")
+        client.succeed("if systemctl restart pd-pki-openvpn-client-leaf-init.service; then exit 1; else exit 0; fi")
+        client.succeed("systemctl is-failed --quiet pd-pki-openvpn-client-leaf-init.service")
+        client.succeed(f'test "$(jq -r \'.subject\' /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json)" = "{client_metadata_subject}"')
+        client.succeed("cp /var/lib/pd-pki/openvpn-client-leaf/client.cert.pem /var/lib/pd-pki/imports/client.cert.pem")
+        client.succeed("cp /var/lib/pd-pki/openvpn-client-leaf/chain.pem /var/lib/pd-pki/imports/client.chain.pem")
+        client.succeed("cp /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json /var/lib/pd-pki/imports/client.metadata.json")
+        client.succeed("systemctl reset-failed pd-pki-openvpn-client-leaf-init.service")
+        client.succeed("systemctl restart pd-pki-openvpn-client-leaf-init.service")
+        client.wait_for_unit("pd-pki-openvpn-client-leaf-init.service")
         intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/next-serial")
         intermediate.succeed("test \"$(cat /var/lib/pd-pki/signer-state/intermediate/serials/next-serial)\" = 3")
         intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/serials/allocated/01.json")

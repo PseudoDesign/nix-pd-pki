@@ -33,6 +33,9 @@ let
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
     crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
     metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
+    import_workdir=""
+
+    trap 'rm -rf "$import_workdir"' EXIT
 
     mkdir -p ${lib.escapeShellArg runtimeDefaults.baseStateDir}
     exec 9>"$lock_file"
@@ -41,17 +44,37 @@ let
     mkdir -p "$state_dir"
     chmod 700 "$state_dir"
 
-    copy_optional_artifact "$key_source_path" "$key_path" 600
-    copy_optional_artifact "$csr_source_path" "$csr_path" 644
-    copy_optional_artifact "$certificate_source_path" "$cert_path" 644
-    copy_optional_artifact "$crl_source_path" "$crl_path" 644
+    import_workdir="$(mktemp -d)"
+    candidate_dir="$import_workdir/root"
+    candidate_key_path="$candidate_dir/root-ca.key.pem"
+    candidate_csr_path="$candidate_dir/root-ca.csr.pem"
+    candidate_cert_path="$candidate_dir/root-ca.cert.pem"
+    candidate_crl_path="$candidate_dir/crl.pem"
+    candidate_metadata_path="$candidate_dir/root-ca.metadata.json"
 
-    if [ -n "$metadata_source_path" ]; then
-      copy_optional_artifact "$metadata_source_path" "$metadata_path" 644
-    elif [ -f "$cert_path" ]; then
-      write_certificate_metadata "$cert_path" "$metadata_path" "root-ca-imported"
-      chmod 644 "$metadata_path"
+    prepare_candidate_artifact "$key_path" "$key_source_path" "$candidate_key_path" 600
+    prepare_candidate_artifact "$csr_path" "$csr_source_path" "$candidate_csr_path" 644
+    prepare_candidate_artifact "$cert_path" "$certificate_source_path" "$candidate_cert_path" 644
+    prepare_candidate_artifact "$crl_path" "$crl_source_path" "$candidate_crl_path" 644
+    prepare_candidate_artifact "$metadata_path" "$metadata_source_path" "$candidate_metadata_path" 644
+
+    if [ -f "$candidate_cert_path" ] && [ -z "$metadata_source_path" ] && { [ ! -f "$candidate_metadata_path" ] || [ -n "$certificate_source_path" ]; }; then
+      write_certificate_metadata "$candidate_cert_path" "$candidate_metadata_path" "root-ca-imported"
+      chmod 644 "$candidate_metadata_path"
     fi
+
+    validate_root_runtime_import_state \
+      "$candidate_key_path" \
+      "$candidate_csr_path" \
+      "$candidate_cert_path" \
+      "$candidate_crl_path" \
+      "$candidate_metadata_path"
+
+    install_candidate_artifact "$candidate_key_path" "$key_path" 600
+    install_candidate_artifact "$candidate_csr_path" "$csr_path" 644
+    install_candidate_artifact "$candidate_cert_path" "$cert_path" 644
+    install_candidate_artifact "$candidate_crl_path" "$crl_path" 644
+    install_candidate_artifact "$candidate_metadata_path" "$metadata_path" 644
   '';
 in
 {

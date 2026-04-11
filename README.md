@@ -10,7 +10,7 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 19 workflow steps are modeled and exported as buildable flake packages
 - 31 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
-- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki` without bootstrapping a CA hierarchy on deployment nodes
+- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, and do not bootstrap a CA hierarchy on deployment nodes
 - `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy, persists signer-side issuance state with automatic serial allocation under a lock, and can generate CRLs from recorded revocations
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
@@ -170,7 +170,7 @@ Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
 - server and client extended key usage validation
 - SAN presence checks
 - NixOS module evaluation
-- Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, import signed certificates without bootstrapping a CA chain, generate and stage CRLs, and enforce revocation with `openssl verify -crl_check`
+- Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, validate and stage imported certificates and metadata atomically without bootstrapping a CA chain, reject bad imports without clobbering the last good runtime state, generate and stage CRLs, and enforce revocation with `openssl verify -crl_check`
 
 The Linux-only [`role-topology` check](/home/adam/pd-pki/checks/nixos-role-topology.nix) adds a multi-node NixOS test on top of the direct derivation-based role and step checks exported on every supported system.
 
@@ -188,6 +188,8 @@ Each role module now has a single runtime behavior:
 - `services.pd-pki.roles.intermediateSigningAuthority` generates a local CA key and CSR, writes `signing-request.json`, then stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
 - `services.pd-pki.roles.openvpnServerLeaf` generates a local key and CSR, writes `issuance-request.json` plus `san-manifest.json`, then stages an imported server certificate, chain, issuer CRL, and optional metadata.
 - `services.pd-pki.roles.openvpnClientLeaf` generates a local key and CSR, writes `issuance-request.json` plus `identity-manifest.json`, then stages an imported client certificate, chain, issuer CRL, and optional metadata.
+
+Imported runtime artifacts are validated before they replace the live files. The modules reject certificate/key or certificate/CSR mismatches, broken chains, wrong EKUs or SANs for leaf roles, CA/profile mismatches for intermediate roles, invalid CRLs, expired CRLs, and metadata that does not match the staged certificate. Updated imports are written through a staging directory first so failed validation leaves the existing runtime state untouched.
 
 Available option paths are:
 

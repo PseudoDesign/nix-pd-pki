@@ -13,7 +13,7 @@
       checkNames =
         [
           "define-contract"
-          "openvpn-mutual-auth"
+          "module-runtime-artifacts"
           "pd-pki"
         ]
         ++ map (role: role.id) definitions.roles

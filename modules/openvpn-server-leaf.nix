@@ -15,126 +15,52 @@ let
     certificate = "${cfg.stateDir}/server.cert.pem";
     chain = "${cfg.stateDir}/chain.pem";
   };
-  rootPaths = {
-    key = "${cfg.rootStateDir}/root-ca.key.pem";
-    csr = "${cfg.rootStateDir}/root-ca.csr.pem";
-    certificate = "${cfg.rootStateDir}/root-ca.cert.pem";
-    metadata = "${cfg.rootStateDir}/root-ca.metadata.json";
-  };
-  intermediatePaths = {
-    key = "${cfg.intermediateStateDir}/intermediate-ca.key.pem";
-    csr = "${cfg.intermediateStateDir}/intermediate-ca.csr.pem";
-    certificate = "${cfg.intermediateStateDir}/intermediate-ca.cert.pem";
-    chain = "${cfg.intermediateStateDir}/chain.pem";
-    metadata = "${cfg.intermediateStateDir}/signer-metadata.json";
-  };
   initScript = pkgs.writeShellScript "pd-pki-openvpn-server-leaf-init" ''
     set -euo pipefail
     umask 077
 
     source ${../packages/pki-workflow-lib.sh}
 
-    root_state_dir=${lib.escapeShellArg cfg.rootStateDir}
-    intermediate_state_dir=${lib.escapeShellArg cfg.intermediateStateDir}
     state_dir=${lib.escapeShellArg cfg.stateDir}
     lock_file=${lib.escapeShellArg "${runtimeDefaults.baseStateDir}/.runtime-init.lock"}
-    root_key=${lib.escapeShellArg rootPaths.key}
-    root_csr=${lib.escapeShellArg rootPaths.csr}
-    root_cert=${lib.escapeShellArg rootPaths.certificate}
-    root_metadata=${lib.escapeShellArg rootPaths.metadata}
-    intermediate_key=${lib.escapeShellArg intermediatePaths.key}
-    intermediate_csr=${lib.escapeShellArg intermediatePaths.csr}
-    intermediate_cert=${lib.escapeShellArg intermediatePaths.certificate}
-    intermediate_chain=${lib.escapeShellArg intermediatePaths.chain}
-    intermediate_metadata=${lib.escapeShellArg intermediatePaths.metadata}
     key_path=${lib.escapeShellArg runtimePaths.key}
     csr_path=${lib.escapeShellArg runtimePaths.csr}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
     chain_path=${lib.escapeShellArg runtimePaths.chain}
+    certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
+    chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
 
-    root_workdir=""
-    intermediate_workdir=""
     request_workdir=""
-    leaf_workdir=""
-    trap 'rm -rf "$root_workdir" "$intermediate_workdir" "$request_workdir" "$leaf_workdir"' EXIT
+    trap 'rm -rf "$request_workdir"' EXIT
 
     mkdir -p ${lib.escapeShellArg runtimeDefaults.baseStateDir}
     exec 9>"$lock_file"
     flock 9
 
-    mkdir -p "$root_state_dir" "$intermediate_state_dir" "$state_dir"
-    chmod 700 "$root_state_dir" "$intermediate_state_dir" "$state_dir"
+    mkdir -p "$state_dir"
+    chmod 700 "$state_dir"
 
-    if [ ! -f "$root_key" ] || [ ! -f "$root_cert" ] || [ ! -f "$root_csr" ] || [ ! -f "$root_metadata" ]; then
-      root_workdir="$(mktemp -d)"
-      generate_self_signed_ca \
-        "$root_workdir" \
-        ${lib.escapeShellArg runtimeDefaults.root.basename} \
-        ${lib.escapeShellArg runtimeDefaults.root.commonName} \
-        ${lib.escapeShellArg runtimeDefaults.root.serial} \
-        ${lib.escapeShellArg runtimeDefaults.root.days} \
-        ${lib.escapeShellArg runtimeDefaults.root.pathLen}
-      cp "$root_workdir/root-ca.key.pem" "$root_key"
-      cp "$root_workdir/root-ca.csr.pem" "$root_csr"
-      cp "$root_workdir/root-ca.cert.pem" "$root_cert"
-      chmod 600 "$root_key"
-      chmod 644 "$root_csr" "$root_cert"
-      write_certificate_metadata "$root_cert" "$root_metadata" "root-ca-runtime"
-      chmod 644 "$root_metadata"
+    if [ -f "$key_path" ] && [ -f "$csr_path" ]; then
+      :
+    elif [ ! -e "$key_path" ] && [ ! -e "$csr_path" ]; then
+      request_workdir="$(mktemp -d)"
+      generate_tls_request \
+        "$request_workdir" \
+        ${lib.escapeShellArg runtimeDefaults.server.basename} \
+        ${lib.escapeShellArg cfg.commonName} \
+        ${lib.escapeShellArg sanSpec} \
+        ${lib.escapeShellArg runtimeDefaults.server.profile}
+      cp "$request_workdir/server.key.pem" "$key_path"
+      cp "$request_workdir/server.csr.pem" "$csr_path"
+      chmod 600 "$key_path"
+      chmod 644 "$csr_path"
+    else
+      printf '%s\n' "Refusing to regenerate a server request from partial state in $state_dir" >&2
+      exit 1
     fi
 
-    if [ ! -f "$intermediate_key" ] || [ ! -f "$intermediate_cert" ] || [ ! -f "$intermediate_csr" ] || [ ! -f "$intermediate_chain" ] || [ ! -f "$intermediate_metadata" ]; then
-      intermediate_workdir="$(mktemp -d)"
-      generate_signed_ca \
-        "$intermediate_workdir" \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.commonName} \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.serial} \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.days} \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.pathLen} \
-        "$root_key" \
-        "$root_cert"
-      cp "$intermediate_workdir/intermediate-ca.key.pem" "$intermediate_key"
-      cp "$intermediate_workdir/intermediate-ca.csr.pem" "$intermediate_csr"
-      cp "$intermediate_workdir/intermediate-ca.cert.pem" "$intermediate_cert"
-      cp "$intermediate_workdir/chain.pem" "$intermediate_chain"
-      chmod 600 "$intermediate_key"
-      chmod 644 "$intermediate_csr" "$intermediate_cert" "$intermediate_chain"
-      write_certificate_metadata "$intermediate_cert" "$intermediate_metadata" "intermediate-ca-runtime"
-      chmod 644 "$intermediate_metadata"
-    fi
-
-    if [ -f "$key_path" ] && [ -f "$cert_path" ] && [ -f "$csr_path" ] && [ -f "$chain_path" ]; then
-      exit 0
-    fi
-
-    request_workdir="$(mktemp -d)"
-    leaf_workdir="$(mktemp -d)"
-
-    generate_tls_request \
-      "$request_workdir" \
-      ${lib.escapeShellArg runtimeDefaults.server.basename} \
-      ${lib.escapeShellArg cfg.commonName} \
-      ${lib.escapeShellArg sanSpec} \
-      ${lib.escapeShellArg runtimeDefaults.server.profile}
-    sign_tls_certificate \
-      "$leaf_workdir" \
-      ${lib.escapeShellArg runtimeDefaults.server.basename} \
-      "$request_workdir/server.csr.pem" \
-      ${lib.escapeShellArg sanSpec} \
-      ${lib.escapeShellArg runtimeDefaults.server.profile} \
-      ${lib.escapeShellArg runtimeDefaults.server.serial} \
-      ${lib.escapeShellArg runtimeDefaults.server.days} \
-      "$intermediate_key" \
-      "$intermediate_cert" \
-      "$root_cert"
-
-    cp "$request_workdir/server.key.pem" "$key_path"
-    cp "$request_workdir/server.csr.pem" "$csr_path"
-    cp "$leaf_workdir/server.cert.pem" "$cert_path"
-    cp "$leaf_workdir/chain.pem" "$chain_path"
-    chmod 600 "$key_path"
-    chmod 644 "$csr_path" "$cert_path" "$chain_path"
+    copy_optional_artifact "$certificate_source_path" "$cert_path" 644
+    copy_optional_artifact "$chain_source_path" "$chain_path" 644
   '';
 in
 {
@@ -146,22 +72,6 @@ in
       default = runtimeDefaults.server.stateDir;
       description = ''
         Mutable directory where the runtime OpenVPN server keypair and certificate chain live.
-      '';
-    };
-
-    rootStateDir = lib.mkOption {
-      type = lib.types.str;
-      default = runtimeDefaults.root.stateDir;
-      description = ''
-        Mutable directory where the runtime root CA signer lives.
-      '';
-    };
-
-    intermediateStateDir = lib.mkOption {
-      type = lib.types.str;
-      default = runtimeDefaults.intermediate.stateDir;
-      description = ''
-        Mutable directory where the runtime intermediate CA signer lives.
       '';
     };
 
@@ -185,7 +95,24 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether to generate simulated runtime OpenVPN server material under the mutable state directories.
+        Whether to run the runtime initialization service for the OpenVPN server role.
+      '';
+    };
+
+    certificateSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an externally signed server certificate to stage into the runtime
+        state directory.
+      '';
+    };
+
+    chainSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to a server certificate chain to stage into the runtime state directory.
       '';
     };
 

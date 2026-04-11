@@ -40,6 +40,17 @@ write_status() {
     }' > "${step_dir}/status.json"
 }
 
+copy_optional_artifact() {
+  local source_path="$1"
+  local target_path="$2"
+  local mode="$3"
+
+  if [ -n "$source_path" ]; then
+    cp "$source_path" "$target_path"
+    chmod "$mode" "$target_path"
+  fi
+}
+
 certificate_subject() {
   local certificate="$1"
   openssl x509 -in "$certificate" -noout -subject | sed 's/^subject=//'
@@ -124,6 +135,36 @@ EOF
     -extfile "$ext_path" \
     -extensions v3_ca \
     -out "$cert_path"
+}
+
+generate_ca_request() {
+  local artifacts_dir="$1"
+  local basename="$2"
+  local common_name="$3"
+  local pathlen="$4"
+
+  local key_path="${artifacts_dir}/${basename}.key.pem"
+  local csr_path="${artifacts_dir}/${basename}.csr.pem"
+  local config_path="${artifacts_dir}/${basename}-req.conf"
+
+  mkdir -p "$artifacts_dir"
+  cat > "$config_path" <<EOF
+[ req ]
+distinguished_name = dn
+prompt = no
+req_extensions = req_ext
+
+[ dn ]
+CN = ${common_name}
+
+[ req_ext ]
+basicConstraints = critical, CA:true, pathlen:${pathlen}
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+EOF
+
+  openssl genrsa -out "$key_path" 2048
+  openssl req -new -sha256 -key "$key_path" -config "$config_path" -out "$csr_path"
 }
 
 generate_signed_ca() {

@@ -2,7 +2,7 @@
 
 Nix-based PKI workflow fixtures for Pseudo Design.
 
-This repository is no longer just a scaffold. It now builds deterministic, machine-readable PKI workflow outputs for four certificate roles and validates them with Nix checks, NixOS module evaluation, and Linux OpenVPN integration tests.
+This repository is no longer just a scaffold. It now builds deterministic, machine-readable PKI workflow outputs for four certificate roles and validates them with Nix checks, NixOS module evaluation, and Linux VM tests.
 
 ## Current State
 
@@ -10,7 +10,7 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 19 workflow steps are modeled and exported as buildable flake packages
 - 31 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
-- NixOS modules expose each role under `services.pd-pki.roles.*` and stage runtime keys under `/var/lib/pd-pki`
+- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki` without bootstrapping a CA hierarchy on deployment nodes
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## What This Repository Is Today
@@ -28,7 +28,7 @@ Each role package produces:
 
 The aggregate `pd-pki` package is a link farm that exposes the four role packages together.
 
-When a role module is enabled, runtime key material is created on the host under `/var/lib/pd-pki/...` instead of being copied into the package output.
+When a role module is enabled, deployment nodes keep mutable runtime artifacts under `/var/lib/pd-pki/...`, generate only the local key and CSR material they own where appropriate, and expect certificates and chains to be staged from an external signing workflow.
 
 ## What It Is Not Yet
 
@@ -38,7 +38,7 @@ This repo is still test-oriented rather than production-ready PKI automation:
 - root and intermediate hardware-backed flows are simulated, not integrated with YubiKey or HSM hardware
 - revocation is represented as JSON metadata, not CRLs or OCSP
 - issuance inputs are fixed representative values baked into the derivations today
-- runtime certificate authorities are host-local fixtures rather than an offline or HSM-backed production signing workflow
+- role packages still model certificate authorities as deterministic fixtures rather than an offline or HSM-backed production signing workflow
 
 ## Implemented Roles
 
@@ -102,7 +102,7 @@ The flake exports the following top-level outputs:
   - aggregate package check
   - role and step checks
   - NixOS module checks
-  - Linux-only OpenVPN mutual-auth and role-topology tests
+  - Linux-only runtime-module and role-topology tests
 - `nixosModules`
   - `default`
   - `root-certificate-authority`
@@ -125,7 +125,7 @@ Outputs are generated for:
 - `x86_64-darwin`
 - `aarch64-darwin`
 
-The heavier NixOS and OpenVPN VM integration tests run only on Linux hosts.
+The heavier NixOS VM tests run only on Linux hosts.
 
 ## Package Layout
 
@@ -168,7 +168,7 @@ Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
 - server and client extended key usage validation
 - SAN presence checks
 - NixOS module evaluation
-- Linux OpenVPN mutual TLS using the generated server and client bundles
+- Linux-only verification that runtime modules generate only their local mutable artifacts and stage imported certificates without bootstrapping a CA chain
 
 On Linux, role and step checks are exercised through a multi-node NixOS topology test. On non-Linux systems, role and step checks fall back to direct derivation-based validation.
 
@@ -179,6 +179,13 @@ Each role has a NixOS module built from [`modules/mk-role-module.nix`](/home/ada
 - exposes the role package under `/etc/pd-pki/<role-id>` by default
 - can add the role package to `environment.systemPackages`
 - exposes read-only `definition` and `stepIds` values derived from the workflow contract
+
+Each role module now has a single runtime behavior:
+
+- `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root artifacts into mutable runtime paths.
+- `services.pd-pki.roles.intermediateSigningAuthority` generates a local CA key and CSR, then stages an imported intermediate certificate, chain, and optional metadata.
+- `services.pd-pki.roles.openvpnServerLeaf` generates a local key and CSR, then stages an imported server certificate and chain.
+- `services.pd-pki.roles.openvpnClientLeaf` generates a local key and CSR, then stages an imported client certificate and chain.
 
 Available option paths are:
 
@@ -193,9 +200,16 @@ Example:
 {
   imports = [ inputs.pd-pki.nixosModules.default ];
 
-  services.pd-pki.roles.rootCertificateAuthority = {
+  services.pd-pki.roles.openvpnServerLeaf = {
     enable = true;
-    installPackage = true;
+    certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
+    chainSourcePath = "/var/lib/pd-pki/imports/server.chain.pem";
+  };
+
+  services.pd-pki.roles.openvpnClientLeaf = {
+    enable = true;
+    certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
+    chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
   };
 }
 ```

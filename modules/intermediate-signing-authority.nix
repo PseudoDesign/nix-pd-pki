@@ -15,84 +15,60 @@ let
     chain = "${cfg.stateDir}/chain.pem";
     metadata = "${cfg.stateDir}/signer-metadata.json";
   };
-  rootPaths = {
-    key = "${cfg.rootStateDir}/root-ca.key.pem";
-    csr = "${cfg.rootStateDir}/root-ca.csr.pem";
-    certificate = "${cfg.rootStateDir}/root-ca.cert.pem";
-    metadata = "${cfg.rootStateDir}/root-ca.metadata.json";
-  };
   initScript = pkgs.writeShellScript "pd-pki-intermediate-signing-authority-init" ''
     set -euo pipefail
     umask 077
 
     source ${../packages/pki-workflow-lib.sh}
 
-    root_state_dir=${lib.escapeShellArg cfg.rootStateDir}
     state_dir=${lib.escapeShellArg cfg.stateDir}
     lock_file=${lib.escapeShellArg "${runtimeDefaults.baseStateDir}/.runtime-init.lock"}
-    root_key=${lib.escapeShellArg rootPaths.key}
-    root_csr=${lib.escapeShellArg rootPaths.csr}
-    root_cert=${lib.escapeShellArg rootPaths.certificate}
-    root_metadata=${lib.escapeShellArg rootPaths.metadata}
     key_path=${lib.escapeShellArg runtimePaths.key}
     csr_path=${lib.escapeShellArg runtimePaths.csr}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
     chain_path=${lib.escapeShellArg runtimePaths.chain}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
+    certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
+    chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
+    metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
 
-    root_workdir=""
     intermediate_workdir=""
-    trap 'rm -rf "$root_workdir" "$intermediate_workdir"' EXIT
+    trap 'rm -rf "$intermediate_workdir"' EXIT
 
     mkdir -p ${lib.escapeShellArg runtimeDefaults.baseStateDir}
     exec 9>"$lock_file"
     flock 9
 
-    mkdir -p "$root_state_dir" "$state_dir"
-    chmod 700 "$root_state_dir" "$state_dir"
+    mkdir -p "$state_dir"
+    chmod 700 "$state_dir"
 
-    if [ ! -f "$root_key" ] || [ ! -f "$root_cert" ] || [ ! -f "$root_csr" ] || [ ! -f "$root_metadata" ]; then
-      root_workdir="$(mktemp -d)"
-      generate_self_signed_ca \
-        "$root_workdir" \
-        ${lib.escapeShellArg runtimeDefaults.root.basename} \
-        ${lib.escapeShellArg runtimeDefaults.root.commonName} \
-        ${lib.escapeShellArg runtimeDefaults.root.serial} \
-        ${lib.escapeShellArg runtimeDefaults.root.days} \
-        ${lib.escapeShellArg runtimeDefaults.root.pathLen}
-      cp "$root_workdir/root-ca.key.pem" "$root_key"
-      cp "$root_workdir/root-ca.csr.pem" "$root_csr"
-      cp "$root_workdir/root-ca.cert.pem" "$root_cert"
-      chmod 600 "$root_key"
-      chmod 644 "$root_csr" "$root_cert"
-      write_certificate_metadata "$root_cert" "$root_metadata" "root-ca-runtime"
-      chmod 644 "$root_metadata"
+    if [ -f "$key_path" ] && [ -f "$csr_path" ]; then
+      :
+    elif [ ! -e "$key_path" ] && [ ! -e "$csr_path" ]; then
+      intermediate_workdir="$(mktemp -d)"
+      generate_ca_request \
+        "$intermediate_workdir" \
+        ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
+        ${lib.escapeShellArg runtimeDefaults.intermediate.commonName} \
+        ${lib.escapeShellArg runtimeDefaults.intermediate.pathLen}
+      cp "$intermediate_workdir/intermediate-ca.key.pem" "$key_path"
+      cp "$intermediate_workdir/intermediate-ca.csr.pem" "$csr_path"
+      chmod 600 "$key_path"
+      chmod 644 "$csr_path"
+    else
+      printf '%s\n' "Refusing to regenerate an intermediate request from partial state in $state_dir" >&2
+      exit 1
     fi
 
-    if [ -f "$key_path" ] && [ -f "$cert_path" ] && [ -f "$csr_path" ] && [ -f "$chain_path" ] && [ -f "$metadata_path" ]; then
-      exit 0
+    copy_optional_artifact "$certificate_source_path" "$cert_path" 644
+    copy_optional_artifact "$chain_source_path" "$chain_path" 644
+
+    if [ -n "$metadata_source_path" ]; then
+      copy_optional_artifact "$metadata_source_path" "$metadata_path" 644
+    elif [ -f "$cert_path" ]; then
+      write_certificate_metadata "$cert_path" "$metadata_path" "intermediate-ca-imported"
+      chmod 644 "$metadata_path"
     fi
-
-    intermediate_workdir="$(mktemp -d)"
-
-    generate_signed_ca \
-      "$intermediate_workdir" \
-      ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
-      ${lib.escapeShellArg runtimeDefaults.intermediate.commonName} \
-      ${lib.escapeShellArg runtimeDefaults.intermediate.serial} \
-      ${lib.escapeShellArg runtimeDefaults.intermediate.days} \
-      ${lib.escapeShellArg runtimeDefaults.intermediate.pathLen} \
-      "$root_key" \
-      "$root_cert"
-
-    cp "$intermediate_workdir/intermediate-ca.key.pem" "$key_path"
-    cp "$intermediate_workdir/intermediate-ca.csr.pem" "$csr_path"
-    cp "$intermediate_workdir/intermediate-ca.cert.pem" "$cert_path"
-    cp "$intermediate_workdir/chain.pem" "$chain_path"
-    chmod 600 "$key_path"
-    chmod 644 "$csr_path" "$cert_path" "$chain_path"
-    write_certificate_metadata "$cert_path" "$metadata_path" "intermediate-ca-runtime"
-    chmod 644 "$metadata_path"
   '';
 in
 {
@@ -107,19 +83,37 @@ in
       '';
     };
 
-    rootStateDir = lib.mkOption {
-      type = lib.types.str;
-      default = runtimeDefaults.root.stateDir;
-      description = ''
-        Mutable directory where the runtime root CA signer lives.
-      '';
-    };
-
     generateRuntimeSecrets = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether to generate simulated runtime intermediate CA material under the mutable state directories.
+        Whether to run the runtime initialization service for the intermediate role.
+      '';
+    };
+
+    certificateSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an externally signed intermediate certificate to stage into the
+        runtime state directory.
+      '';
+    };
+
+    chainSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an intermediate certificate chain to stage into the runtime state
+        directory.
+      '';
+    };
+
+    metadataSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to intermediate metadata JSON to stage into the runtime state directory.
       '';
     };
 

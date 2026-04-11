@@ -11,9 +11,9 @@ let
       description = "Confirm the top-level PKI definitions serialize to valid JSON.";
     }
     {
-      name = "openvpn-mutual-auth";
-      title = "Validate OpenVPN Mutual Auth";
-      description = "Boot an OpenVPN server and client with the generated PKI artifacts and prove mutual TLS authentication succeeds.";
+      name = "module-runtime-artifacts";
+      title = "Validate Module Runtime Artifacts";
+      description = "Boot each role module and confirm it only creates local mutable artifacts while staging any imported certificates and chains.";
     }
     {
       name = "pd-pki";

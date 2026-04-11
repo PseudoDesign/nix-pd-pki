@@ -26,6 +26,10 @@ let
     csr_path=${lib.escapeShellArg runtimePaths.csr}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
+    key_source_path=${lib.escapeShellArg (if cfg.keySourcePath == null then "" else cfg.keySourcePath)}
+    csr_source_path=${lib.escapeShellArg (if cfg.csrSourcePath == null then "" else cfg.csrSourcePath)}
+    certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
+    metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
 
     mkdir -p ${lib.escapeShellArg runtimeDefaults.baseStateDir}
     exec 9>"$lock_file"
@@ -34,28 +38,16 @@ let
     mkdir -p "$state_dir"
     chmod 700 "$state_dir"
 
-    if [ -f "$key_path" ] && [ -f "$cert_path" ] && [ -f "$csr_path" ] && [ -f "$metadata_path" ]; then
-      exit 0
+    copy_optional_artifact "$key_source_path" "$key_path" 600
+    copy_optional_artifact "$csr_source_path" "$csr_path" 644
+    copy_optional_artifact "$certificate_source_path" "$cert_path" 644
+
+    if [ -n "$metadata_source_path" ]; then
+      copy_optional_artifact "$metadata_source_path" "$metadata_path" 644
+    elif [ -f "$cert_path" ]; then
+      write_certificate_metadata "$cert_path" "$metadata_path" "root-ca-imported"
+      chmod 644 "$metadata_path"
     fi
-
-    workdir="$(mktemp -d)"
-    trap 'rm -rf "$workdir"' EXIT
-
-    generate_self_signed_ca \
-      "$workdir" \
-      ${lib.escapeShellArg runtimeDefaults.root.basename} \
-      ${lib.escapeShellArg runtimeDefaults.root.commonName} \
-      ${lib.escapeShellArg runtimeDefaults.root.serial} \
-      ${lib.escapeShellArg runtimeDefaults.root.days} \
-      ${lib.escapeShellArg runtimeDefaults.root.pathLen}
-
-    cp "$workdir/root-ca.key.pem" "$key_path"
-    cp "$workdir/root-ca.csr.pem" "$csr_path"
-    cp "$workdir/root-ca.cert.pem" "$cert_path"
-    chmod 600 "$key_path"
-    chmod 644 "$csr_path" "$cert_path"
-    write_certificate_metadata "$cert_path" "$metadata_path" "root-ca-runtime"
-    chmod 644 "$metadata_path"
   '';
 in
 {
@@ -74,7 +66,40 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether to generate simulated runtime root CA material under the mutable state directory.
+        Whether to run the runtime initialization service for the root role.
+      '';
+    };
+
+    keySourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an existing root private key to stage into the runtime state directory.
+      '';
+    };
+
+    csrSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an existing root certificate signing request to stage into the runtime
+        state directory.
+      '';
+    };
+
+    certificateSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an existing root certificate to stage into the runtime state directory.
+      '';
+    };
+
+    metadataSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to root metadata JSON to stage into the runtime state directory.
       '';
     };
 

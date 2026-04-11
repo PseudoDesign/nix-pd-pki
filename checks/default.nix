@@ -55,9 +55,9 @@ let
       '';
     }
     {
-      name = "openvpn-mutual-auth";
-      value = import ./openvpn-mutual-auth.nix {
-        inherit pkgs nixosModules;
+      name = "module-runtime-artifacts";
+      value = import ./module-runtime-artifacts.nix {
+        inherit pkgs packages nixosModules;
       };
     }
     {

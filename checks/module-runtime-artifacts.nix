@@ -184,10 +184,55 @@ if pkgs.stdenv.hostPlatform.isLinux then
         client.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         client.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem")
 
+        root_imported.succeed("""jq -n '
+        {
+          schemaVersion: 1,
+          roles: {
+            "intermediate-signing-authority": {
+              defaultDays: 1825,
+              maxDays: 1825,
+              commonNamePatterns: [
+                "^Pseudo Design Runtime Intermediate Signing Authority$"
+              ],
+              allowedPathLens: [0]
+            }
+          }
+        }' > /tmp/root-policy.json""")
+
+        intermediate.succeed("""jq -n '
+        {
+          schemaVersion: 1,
+          roles: {
+            "openvpn-server-leaf": {
+              defaultDays: 825,
+              maxDays: 825,
+              allowedProfiles: ["serverAuth"],
+              commonNamePatterns: [
+                "^[A-Za-z0-9.-]+$"
+              ],
+              subjectAltNamePatterns: [
+                "^DNS:[A-Za-z0-9.-]+$",
+                "^IP:[0-9.]+$"
+              ]
+            },
+            "openvpn-client-leaf": {
+              defaultDays: 825,
+              maxDays: 825,
+              allowedProfiles: ["clientAuth"],
+              commonNamePatterns: [
+                "^[A-Za-z0-9.-]+$"
+              ],
+              subjectAltNamePatterns: [
+                "^DNS:[A-Za-z0-9.-]+$"
+              ]
+            }
+          }
+        }' > /tmp/intermediate-policy.json""")
+
         intermediate.succeed("pd-pki-signing-tools export-request --role intermediate-signing-authority --state-dir /var/lib/pd-pki/authorities/intermediate --out-dir /tmp/intermediate-request")
         intermediate.copy_from_vm("/tmp/intermediate-request")
         root_imported.copy_from_host(str(Path(out_dir, "intermediate-request")), "/tmp/intermediate-request")
-        root_imported.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/intermediate-request --out-dir /tmp/intermediate-signed --issuer-key /var/lib/pd-pki/authorities/root/root-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/root/root-ca.cert.pem --signer-state-dir /var/lib/pd-pki/signer-state/root --days 1825")
+        root_imported.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/intermediate-request --out-dir /tmp/intermediate-signed --issuer-key /var/lib/pd-pki/authorities/root/root-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/root/root-ca.cert.pem --signer-state-dir /var/lib/pd-pki/signer-state/root --policy-file /tmp/root-policy.json")
         root_imported.copy_from_vm("/tmp/intermediate-signed")
         intermediate.copy_from_host(str(Path(out_dir, "intermediate-signed")), "/tmp/intermediate-signed")
         intermediate.succeed("pd-pki-signing-tools import-signed --role intermediate-signing-authority --state-dir /var/lib/pd-pki/authorities/intermediate --signed-dir /tmp/intermediate-signed")
@@ -217,9 +262,39 @@ if pkgs.stdenv.hostPlatform.isLinux then
         server.succeed("pd-pki-signing-tools export-request --role openvpn-server-leaf --state-dir /var/lib/pd-pki/openvpn-server-leaf --out-dir /tmp/server-request")
         server.copy_from_vm("/tmp/server-request")
         intermediate.copy_from_host(str(Path(out_dir, "server-request")), "/tmp/server-request")
-        intermediate.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/server-request --out-dir /tmp/server-signed --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --days 825")
-        intermediate.copy_from_vm("/tmp/server-signed")
-        server.copy_from_host(str(Path(out_dir, "server-signed")), "/tmp/server-signed")
+        intermediate.succeed("if pd-pki-signing-tools sign-request --request-dir /tmp/server-request --out-dir /tmp/server-too-long --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --policy-file /tmp/intermediate-policy.json --days 900 >/tmp/server-too-long.log 2>&1; then exit 1; else exit 0; fi")
+        intermediate.succeed("""mkdir -p /tmp/sign-logs
+        (
+          pd-pki-signing-tools sign-request \
+            --request-dir /tmp/server-request \
+            --out-dir /tmp/server-signed-a \
+            --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem \
+            --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem \
+            --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem \
+            --signer-state-dir /var/lib/pd-pki/signer-state/intermediate \
+            --policy-file /tmp/intermediate-policy.json \
+            >/tmp/sign-logs/server-a.log 2>&1
+        ) &
+        pid_a=$!
+        (
+          pd-pki-signing-tools sign-request \
+            --request-dir /tmp/server-request \
+            --out-dir /tmp/server-signed-b \
+            --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem \
+            --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem \
+            --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem \
+            --signer-state-dir /var/lib/pd-pki/signer-state/intermediate \
+            --policy-file /tmp/intermediate-policy.json \
+            >/tmp/sign-logs/server-b.log 2>&1
+        ) &
+        pid_b=$!
+        wait "$pid_a"
+        wait "$pid_b"
+        cmp -s /tmp/server-signed-a/server.cert.pem /tmp/server-signed-b/server.cert.pem""")
+        intermediate.succeed("test \"$(find /var/lib/pd-pki/signer-state/intermediate/requests -maxdepth 1 -name '*.json' | wc -l | tr -d '[:space:]')\" = 1")
+        intermediate.succeed("test \"$(find /var/lib/pd-pki/signer-state/intermediate/issuances -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')\" = 1")
+        intermediate.copy_from_vm("/tmp/server-signed-a")
+        server.copy_from_host(str(Path(out_dir, "server-signed-a")), "/tmp/server-signed")
         server.succeed("pd-pki-signing-tools import-signed --role openvpn-server-leaf --state-dir /var/lib/pd-pki/openvpn-server-leaf --signed-dir /tmp/server-signed")
         server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem")
         server.succeed("test -f /var/lib/pd-pki/openvpn-server-leaf/chain.pem")
@@ -230,7 +305,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
         client.succeed("pd-pki-signing-tools export-request --role openvpn-client-leaf --state-dir /var/lib/pd-pki/openvpn-client-leaf --out-dir /tmp/client-request")
         client.copy_from_vm("/tmp/client-request")
         intermediate.copy_from_host(str(Path(out_dir, "client-request")), "/tmp/client-request")
-        intermediate.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/client-request --out-dir /tmp/client-signed --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --days 825")
+        intermediate.succeed("cp -R /tmp/client-request /tmp/client-request-invalid-profile")
+        intermediate.succeed("tmp_request=$(mktemp) && jq '.requestedProfile = \"serverAuth\"' /tmp/client-request-invalid-profile/request.json > \"$tmp_request\" && mv \"$tmp_request\" /tmp/client-request-invalid-profile/request.json")
+        intermediate.succeed("if pd-pki-signing-tools sign-request --request-dir /tmp/client-request-invalid-profile --out-dir /tmp/client-invalid-profile-signed --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --policy-file /tmp/intermediate-policy.json >/tmp/client-invalid-profile.log 2>&1; then exit 1; else exit 0; fi")
+        intermediate.succeed("pd-pki-signing-tools sign-request --request-dir /tmp/client-request --out-dir /tmp/client-signed --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --policy-file /tmp/intermediate-policy.json")
         intermediate.copy_from_vm("/tmp/client-signed")
         client.copy_from_host(str(Path(out_dir, "client-signed")), "/tmp/client-signed")
         client.succeed("pd-pki-signing-tools import-signed --role openvpn-client-leaf --state-dir /var/lib/pd-pki/openvpn-client-leaf --signed-dir /tmp/client-signed")
@@ -253,6 +331,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/issuances/02/issuance.json | grep -Fx 'revoked'")
         intermediate.succeed("jq -r '.reason' /var/lib/pd-pki/signer-state/intermediate/revocations/02.json | grep -Fx 'keyCompromise'")
         intermediate.succeed("jq -r '.status' /var/lib/pd-pki/signer-state/intermediate/serials/allocated/02.json | grep -Fx 'revoked'")
+        intermediate.succeed("if pd-pki-signing-tools sign-request --request-dir /tmp/client-request --out-dir /tmp/client-resigned --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --issuer-chain /var/lib/pd-pki/authorities/intermediate/chain.pem --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --policy-file /tmp/intermediate-policy.json >/tmp/client-resigned.log 2>&1; then exit 1; else exit 0; fi")
         intermediate.succeed("pd-pki-signing-tools generate-crl --signer-state-dir /var/lib/pd-pki/signer-state/intermediate --issuer-key /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem --issuer-cert /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem --out-dir /tmp/intermediate-crl --days 30")
         intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/crls/current.pem")
         intermediate.succeed("test -f /var/lib/pd-pki/signer-state/intermediate/crls/metadata.json")

@@ -5,6 +5,7 @@ pkgs.writeShellApplication {
     pkgs.coreutils
     pkgs.jq
     pkgs.openssl
+    pkgs.util-linux
   ];
   text = ''
     set -euo pipefail
@@ -120,6 +121,42 @@ pkgs.writeShellApplication {
       esac
     }
 
+    validate_unsigned_decimal() {
+      local value="$1"
+      local label="$2"
+
+      [ -n "$value" ] || die "$label is empty"
+      case "$value" in
+        *[!0-9]*) die "$label must be an unsigned decimal integer" ;;
+      esac
+    }
+
+    value_in_list() {
+      local needle="$1"
+      shift
+
+      local candidate
+      for candidate in "$@"; do
+        if [ "$candidate" = "$needle" ]; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    value_matches_any_pattern() {
+      local value="$1"
+      shift
+
+      local pattern
+      for pattern in "$@"; do
+        if printf '%s\n' "$value" | grep -Eq "$pattern"; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
     crl_last_update() {
       local crl_path="$1"
       openssl crl -in "$crl_path" -noout -lastupdate | cut -d= -f2-
@@ -197,6 +234,30 @@ pkgs.writeShellApplication {
       printf '%s\n' "$state_dir/crls/next-crl-number"
     }
 
+    signer_state_lock_path() {
+      local state_dir="$1"
+      printf '%s\n' "$state_dir/.state.lock"
+    }
+
+    acquire_signer_state_lock() {
+      local state_dir="$1"
+      local fd_var_name="$2"
+      local fd
+      local lock_path
+
+      signer_state_init "$state_dir"
+      lock_path="$(signer_state_lock_path "$state_dir")"
+      exec {fd}> "$lock_path"
+      flock "$fd"
+      printf -v "$fd_var_name" '%s' "$fd"
+    }
+
+    close_locked_fd() {
+      local fd="$1"
+      [ -n "$fd" ] || return 0
+      eval "exec ''${fd}>&-"
+    }
+
     signer_state_resolve_serial() {
       local state_dir="$1"
       local serial="$2"
@@ -241,13 +302,138 @@ pkgs.writeShellApplication {
       next_serial_path="$(signer_state_next_serial_path "$state_dir")"
       serial="$(tr -d '[:space:]' < "$next_serial_path")"
 
-      [ -n "$serial" ] || die "Signer state next serial is empty"
-      case "$serial" in
-        *[!0-9]*) die "Signer state next serial must be an unsigned decimal integer" ;;
-      esac
+      validate_unsigned_decimal "$serial" "Signer state next serial"
 
       printf '%s\n' "$((serial + 1))" > "$next_serial_path"
       printf '%s\n' "$serial"
+    }
+
+    validate_policy_file() {
+      local policy_file="$1"
+
+      require_file "$policy_file"
+      jq -e '
+        (.schemaVersion // 0) == 1 and
+        (.roles | type == "object")
+      ' "$policy_file" >/dev/null || die "Invalid signer policy file: $policy_file"
+    }
+
+    ensure_policy_role() {
+      local policy_file="$1"
+      local role="$2"
+
+      jq -e --arg role "$role" '.roles[$role] != null' "$policy_file" >/dev/null ||
+        die "Signer policy does not define role: $role"
+    }
+
+    validate_request_kind_for_role() {
+      local role="$1"
+      local request_file="$2"
+      local expected_kind
+      local request_kind
+
+      case "$role" in
+        intermediate-signing-authority) expected_kind="intermediate-ca" ;;
+        openvpn-server-leaf|openvpn-client-leaf) expected_kind="tls-leaf" ;;
+        *) die "Unsupported role in request validation: $role" ;;
+      esac
+
+      request_kind="$(jq -r '.requestKind // empty' "$request_file")"
+      [ "$request_kind" = "$expected_kind" ] ||
+        die "request.json requestKind '$request_kind' does not match role '$role'"
+    }
+
+    resolve_signing_days() {
+      local request_file="$1"
+      local role="$2"
+      local cli_days="$3"
+      local policy_file="$4"
+      local request_days=""
+      local default_days=""
+      local max_days=""
+      local selected_days=""
+
+      request_days="$(jq -r '.requestedDays // empty' "$request_file")"
+
+      if [ -n "$cli_days" ]; then
+        validate_unsigned_decimal "$cli_days" "--days"
+        selected_days="$cli_days"
+      elif [ -n "$policy_file" ]; then
+        default_days="$(jq -r --arg role "$role" '.roles[$role].defaultDays // empty' "$policy_file")"
+        [ -n "$default_days" ] || die "Signer policy is missing roles.''${role}.defaultDays"
+        validate_unsigned_decimal "$default_days" "Signer policy defaultDays"
+        selected_days="$default_days"
+      else
+        [ -n "$request_days" ] || die "--days is required when no signer policy is provided and request.json does not declare requestedDays"
+        validate_unsigned_decimal "$request_days" "request.json requestedDays"
+        selected_days="$request_days"
+      fi
+
+      if [ -n "$policy_file" ]; then
+        max_days="$(jq -r --arg role "$role" '.roles[$role].maxDays // empty' "$policy_file")"
+        if [ -n "$max_days" ]; then
+          validate_unsigned_decimal "$max_days" "Signer policy maxDays"
+          [ "$selected_days" -le "$max_days" ] ||
+            die "Requested validity of $selected_days days exceeds signer policy maxDays $max_days for role $role"
+        fi
+      fi
+
+      printf '%s\n' "$selected_days"
+    }
+
+    validate_request_against_policy() {
+      local request_file="$1"
+      local role="$2"
+      local policy_file="$3"
+      local common_name=""
+      local path_len=""
+      local requested_profile=""
+      local san=""
+      local allowed=()
+      local patterns=()
+      local sans=()
+
+      [ -n "$policy_file" ] || return 0
+
+      ensure_policy_role "$policy_file" "$role"
+
+      common_name="$(jq -r '.commonName // empty' "$request_file")"
+      [ -n "$common_name" ] || die "request.json is missing commonName"
+
+      mapfile -t patterns < <(jq -r --arg role "$role" '(.roles[$role].commonNamePatterns // [])[]' "$policy_file")
+      if [ "''${#patterns[@]}" -gt 0 ] && ! value_matches_any_pattern "$common_name" "''${patterns[@]}"; then
+        die "Signer policy rejected commonName '$common_name' for role $role"
+      fi
+
+      case "$role" in
+        intermediate-signing-authority)
+          path_len="$(jq -r '(.pathLen // empty) | tostring' "$request_file")"
+          [ -n "$path_len" ] || die "request.json is missing pathLen"
+          mapfile -t allowed < <(jq -r --arg role "$role" '(.roles[$role].allowedPathLens // [])[] | tostring' "$policy_file")
+          if [ "''${#allowed[@]}" -gt 0 ] && ! value_in_list "$path_len" "''${allowed[@]}"; then
+            die "Signer policy rejected pathLen '$path_len' for role $role"
+          fi
+          ;;
+        openvpn-server-leaf|openvpn-client-leaf)
+          requested_profile="$(jq -r '.requestedProfile // empty' "$request_file")"
+          [ -n "$requested_profile" ] || die "request.json is missing requestedProfile"
+          mapfile -t allowed < <(jq -r --arg role "$role" '(.roles[$role].allowedProfiles // [])[]' "$policy_file")
+          if [ "''${#allowed[@]}" -gt 0 ] && ! value_in_list "$requested_profile" "''${allowed[@]}"; then
+            die "Signer policy rejected requestedProfile '$requested_profile' for role $role"
+          fi
+
+          mapfile -t patterns < <(jq -r --arg role "$role" '(.roles[$role].subjectAltNamePatterns // [])[]' "$policy_file")
+          if [ "''${#patterns[@]}" -gt 0 ]; then
+            mapfile -t sans < <(jq -r '(.subjectAltNames // [])[]' "$request_file")
+            [ "''${#sans[@]}" -gt 0 ] || die "request.json is missing subjectAltNames"
+            for san in "''${sans[@]}"; do
+              if ! value_matches_any_pattern "$san" "''${patterns[@]}"; then
+                die "Signer policy rejected subjectAltName '$san' for role $role"
+              fi
+            done
+          fi
+          ;;
+      esac
     }
 
     copy_signed_bundle_from_issuance() {
@@ -372,7 +558,7 @@ pkgs.writeShellApplication {
       cat <<'EOF' >&2
 Usage:
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
-  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--serial SERIAL | --signer-state-dir DIR]
+  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
   pd-pki-signing-tools generate-crl --signer-state-dir DIR --issuer-key PATH --issuer-cert PATH --out-dir DIR [--days DAYS]
   pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON]
@@ -453,6 +639,7 @@ EOF
       local signer_state_dir=""
       local serial=""
       local days=""
+      local policy_file=""
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -488,6 +675,10 @@ EOF
             days="$2"
             shift 2
             ;;
+          --policy-file)
+            policy_file="$2"
+            shift 2
+            ;;
           *)
             die "Unknown sign-request argument: $1"
             ;;
@@ -504,12 +695,16 @@ EOF
       if [ -z "$signer_state_dir" ] && [ -z "$serial" ]; then
         die "--serial is required unless --signer-state-dir is provided"
       fi
+      if [ -n "$signer_state_dir" ] && [ -z "$policy_file" ]; then
+        die "--policy-file is required when --signer-state-dir is provided"
+      fi
 
       require_dir "$request_dir"
       require_file "$issuer_key"
       require_file "$issuer_cert"
       [ -z "$issuer_chain" ] || require_file "$issuer_chain"
       require_file "$request_dir/request.json"
+      [ -z "$policy_file" ] || validate_policy_file "$policy_file"
 
       signer_matches_key "$issuer_key" "$issuer_cert" || die "Issuer certificate does not match issuer private key"
 
@@ -522,13 +717,12 @@ EOF
       local request_id=""
       local request_record_path=""
       local issuance_dir=""
-      local requested_days
       local bundle_profile
+      local signer_lock_fd=""
 
       role="$(jq -r '.roleId // empty' "$request_file")"
       basename="$(jq -r '.basename // empty' "$request_file")"
       csr_file="$(jq -r '.csrFile // empty' "$request_file")"
-      requested_days="$(jq -r '.requestedDays // empty' "$request_file")"
 
       [ -n "$role" ] || die "request.json is missing roleId"
       [ -n "$basename" ] || die "request.json is missing basename"
@@ -539,21 +733,33 @@ EOF
       fi
       require_file "$csr_path"
 
-      if [ -z "$days" ]; then
-        [ -n "$requested_days" ] || die "--days is required when request.json does not declare requestedDays"
-        days="$requested_days"
-      fi
+      validate_request_kind_for_role "$role" "$request_file"
+      validate_request_against_policy "$request_file" "$role" "$policy_file"
+      days="$(resolve_signing_days "$request_file" "$role" "$days" "$policy_file")"
 
       if [ -n "$signer_state_dir" ]; then
-        signer_state_init "$signer_state_dir"
+        acquire_signer_state_lock "$signer_state_dir" signer_lock_fd
         request_id="$(request_id_for_bundle "$request_file" "$csr_path")"
         request_record_path="$(signer_state_request_record_path "$signer_state_dir" "$request_id")"
         if [ -f "$request_record_path" ]; then
           local existing_serial
+          local existing_status
           existing_serial="$(jq -r '.serial // empty' "$request_record_path")"
           [ -n "$existing_serial" ] || die "Existing request record is missing serial: $request_record_path"
-          copy_signed_bundle_from_issuance "$(signer_state_issuance_dir "$signer_state_dir" "$existing_serial")" "$basename" "$out_dir"
-          return
+          existing_status="$(jq -r '.status // empty' "$request_record_path")"
+          case "$existing_status" in
+            issued)
+              copy_signed_bundle_from_issuance "$(signer_state_issuance_dir "$signer_state_dir" "$existing_serial")" "$basename" "$out_dir"
+              close_locked_fd "$signer_lock_fd"
+              return
+              ;;
+            revoked)
+              die "Request bundle $request_id has already been issued and revoked; generate a new CSR before requesting a replacement"
+              ;;
+            *)
+              die "Existing request record has unsupported status '$existing_status': $request_record_path"
+              ;;
+          esac
         fi
         serial="$(allocate_serial_from_state "$signer_state_dir")"
       fi
@@ -625,6 +831,7 @@ EOF
         write_request_record "$request_record_path" "$request_id" "$request_file" "$cert_serial" "$issued_at"
         write_serial_record "$(signer_state_serial_record_path "$signer_state_dir" "$cert_serial")" "$cert_serial" "$request_id" "$issued_at"
         write_issuance_record "$issuance_dir/issuance.json" "$cert_serial" "$request_id" "$request_file" "$out_dir/metadata.json" "$issuer_cert" "$issued_at"
+        close_locked_fd "$signer_lock_fd"
       fi
     }
 
@@ -764,14 +971,15 @@ EOF
       require_file "$issuer_cert"
       signer_matches_key "$issuer_key" "$issuer_cert" || die "Issuer certificate does not match issuer private key"
 
-      signer_state_init "$signer_state_dir"
-
       local state_crl_path
       local state_crl_metadata_path
       local state_next_crl_number_path
       local crl_workdir
       local config_path
       local crl_number_seed
+      local signer_lock_fd=""
+
+      acquire_signer_state_lock "$signer_state_dir" signer_lock_fd
 
       state_crl_path="$(signer_state_current_crl_path "$signer_state_dir")"
       state_crl_metadata_path="$(signer_state_crl_metadata_path "$signer_state_dir")"
@@ -876,6 +1084,7 @@ EOF
       cp "$state_crl_metadata_path" "$out_dir/metadata.json"
       chmod 644 "$out_dir/metadata.json"
       rm -rf "$crl_workdir"
+      close_locked_fd "$signer_lock_fd"
     }
 
     revoke_issued() {
@@ -906,7 +1115,6 @@ EOF
       [ -n "$signer_state_dir" ] || die "--signer-state-dir is required"
       [ -n "$serial" ] || die "--serial is required"
       require_dir "$signer_state_dir"
-      serial="$(signer_state_resolve_serial "$signer_state_dir" "$serial")"
       validate_crl_reason "$reason"
 
       local issuance_dir
@@ -917,6 +1125,10 @@ EOF
       local request_id
       local revoked_at
       local update_tmp
+      local signer_lock_fd=""
+
+      acquire_signer_state_lock "$signer_state_dir" signer_lock_fd
+      serial="$(signer_state_resolve_serial "$signer_state_dir" "$serial")"
 
       issuance_dir="$(signer_state_issuance_dir "$signer_state_dir" "$serial")"
       issuance_record_path="$issuance_dir/issuance.json"
@@ -979,6 +1191,7 @@ EOF
         '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
         "$serial_record_path" > "$update_tmp"
       mv "$update_tmp" "$serial_record_path"
+      close_locked_fd "$signer_lock_fd"
     }
 
     [ "$#" -gt 0 ] || {

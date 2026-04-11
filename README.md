@@ -11,7 +11,7 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 31 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
 - NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki` without bootstrapping a CA hierarchy on deployment nodes
-- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, persists signer-side issuance state with automatic serial allocation, and can generate CRLs from recorded revocations
+- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy, persists signer-side issuance state with automatic serial allocation under a lock, and can generate CRLs from recorded revocations
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## What This Repository Is Today
@@ -239,7 +239,7 @@ pd-pki-signing-tools export-request \
   --out-dir /tmp/server-request
 ```
 
-2. On the signer, sign the bundle with the issuing CA key and certificate:
+2. On the signer, sign the bundle with the issuing CA key and certificate plus an explicit signer policy:
 
 ```bash
 pd-pki-signing-tools sign-request \
@@ -249,7 +249,7 @@ pd-pki-signing-tools sign-request \
   --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
   --issuer-chain /secure/issuer/chain.pem \
   --signer-state-dir /secure/issuer/state/intermediate \
-  --days 825
+  --policy-file /secure/issuer/policy/intermediate.json
 ```
 
 3. Back on the request node, import the signed bundle into runtime state:
@@ -261,7 +261,7 @@ pd-pki-signing-tools import-signed \
   --signed-dir /tmp/server-signed
 ```
 
-When `sign-request` runs with `--signer-state-dir`, it allocates the next serial automatically and records the issuance under a signer-managed state tree:
+When `sign-request` runs with `--signer-state-dir`, it now requires `--policy-file`, acquires an advisory lock for the signer state, allocates the next serial automatically, and records the issuance under a signer-managed state tree:
 
 ```text
 <signer-state-dir>/
@@ -286,7 +286,36 @@ When `sign-request` runs with `--signer-state-dir`, it allocates the next serial
         └── <serial>.json
 ```
 
-Repeated signing of the same normalized request bundle reuses the recorded issuance instead of allocating a second serial.
+Repeated signing of the same normalized request bundle reuses the recorded issued bundle instead of allocating a second serial. If that issuance has been revoked, `sign-request` refuses to reuse it and requires a new CSR.
+
+A minimal signer policy looks like this:
+
+```json
+{
+  "schemaVersion": 1,
+  "roles": {
+    "openvpn-server-leaf": {
+      "defaultDays": 825,
+      "maxDays": 825,
+      "allowedProfiles": ["serverAuth"],
+      "commonNamePatterns": ["^[A-Za-z0-9.-]+$"],
+      "subjectAltNamePatterns": [
+        "^DNS:[A-Za-z0-9.-]+$",
+        "^IP:(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$"
+      ]
+    },
+    "openvpn-client-leaf": {
+      "defaultDays": 825,
+      "maxDays": 825,
+      "allowedProfiles": ["clientAuth"],
+      "commonNamePatterns": ["^[A-Za-z0-9.-]+$"],
+      "subjectAltNamePatterns": ["^DNS:[A-Za-z0-9.-]+$"]
+    }
+  }
+}
+```
+
+For intermediate CA requests, the same policy format can constrain `defaultDays`, `maxDays`, `commonNamePatterns`, and `allowedPathLens`.
 
 To revoke an issued serial in signer state:
 

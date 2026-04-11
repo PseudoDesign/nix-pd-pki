@@ -11,7 +11,7 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 31 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
 - NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki` without bootstrapping a CA hierarchy on deployment nodes
-- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, and imports signed artifacts back into runtime state
+- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, and can persist signer-side issuance state with automatic serial allocation and revocation metadata
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## What This Repository Is Today
@@ -245,7 +245,7 @@ pd-pki-signing-tools sign-request \
   --issuer-key /secure/issuer/intermediate-ca.key.pem \
   --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
   --issuer-chain /secure/issuer/chain.pem \
-  --serial 9201 \
+  --signer-state-dir /secure/issuer/state/intermediate \
   --days 825
 ```
 
@@ -257,6 +257,40 @@ pd-pki-signing-tools import-signed \
   --state-dir /var/lib/pd-pki/openvpn-server-leaf \
   --signed-dir /tmp/server-signed
 ```
+
+When `sign-request` runs with `--signer-state-dir`, it allocates the next serial automatically and records the issuance under a signer-managed state tree:
+
+```text
+<signer-state-dir>/
+├── issuances/
+│   └── <serial>/
+│       ├── issuance.json
+│       ├── metadata.json
+│       ├── request.json
+│       ├── chain.pem
+│       └── <role cert and csr files>
+├── requests/
+│   └── <request-id>.json
+├── revocations/
+│   └── <serial>.json
+└── serials/
+    ├── next-serial
+    └── allocated/
+        └── <serial>.json
+```
+
+Repeated signing of the same normalized request bundle reuses the recorded issuance instead of allocating a second serial.
+
+To revoke an issued serial in signer state:
+
+```bash
+pd-pki-signing-tools revoke-issued \
+  --signer-state-dir /secure/issuer/state/intermediate \
+  --serial 2 \
+  --reason keyCompromise
+```
+
+That updates the issuance, request, and serial records to `status = "revoked"` and writes a matching revocation record under `revocations/`.
 
 Exported request bundles always include `request.json`, the canonical CSR filename for the role, and any role-specific manifest such as `san-manifest.json` or `identity-manifest.json`. Signed bundles contain the issued certificate, `chain.pem`, `metadata.json`, and a copy of the normalized `request.json`.
 

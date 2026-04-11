@@ -79,12 +79,174 @@ pkgs.writeShellApplication {
       [ "$key_pubkey" = "$cert_pubkey" ]
     }
 
+    current_timestamp_utc() {
+      date -u +"%Y-%m-%dT%H:%M:%SZ"
+    }
+
+    signer_state_init() {
+      local state_dir="$1"
+      mkdir -p \
+        "$state_dir/issuances" \
+        "$state_dir/requests" \
+        "$state_dir/revocations" \
+        "$state_dir/serials/allocated"
+
+      if [ ! -f "$state_dir/serials/next-serial" ]; then
+        printf '%s\n' "1" > "$state_dir/serials/next-serial"
+      fi
+    }
+
+    signer_state_next_serial_path() {
+      local state_dir="$1"
+      printf '%s\n' "$state_dir/serials/next-serial"
+    }
+
+    signer_state_request_record_path() {
+      local state_dir="$1"
+      local request_id="$2"
+      printf '%s\n' "$state_dir/requests/$request_id.json"
+    }
+
+    signer_state_serial_record_path() {
+      local state_dir="$1"
+      local serial="$2"
+      printf '%s\n' "$state_dir/serials/allocated/$serial.json"
+    }
+
+    signer_state_issuance_dir() {
+      local state_dir="$1"
+      local serial="$2"
+      printf '%s\n' "$state_dir/issuances/$serial"
+    }
+
+    signer_state_revocation_record_path() {
+      local state_dir="$1"
+      local serial="$2"
+      printf '%s\n' "$state_dir/revocations/$serial.json"
+    }
+
+    request_id_for_bundle() {
+      local request_file="$1"
+      local csr_path="$2"
+      local normalized_request
+
+      normalized_request="$(mktemp)"
+      jq -cS . "$request_file" > "$normalized_request"
+      cat "$normalized_request" "$csr_path" | sha256sum | cut -d' ' -f1
+      rm -f "$normalized_request"
+    }
+
+    allocate_serial_from_state() {
+      local state_dir="$1"
+      local next_serial_path
+      local serial
+
+      signer_state_init "$state_dir"
+      next_serial_path="$(signer_state_next_serial_path "$state_dir")"
+      serial="$(tr -d '[:space:]' < "$next_serial_path")"
+
+      [ -n "$serial" ] || die "Signer state next serial is empty"
+      case "$serial" in
+        *[!0-9]*) die "Signer state next serial must be an unsigned decimal integer" ;;
+      esac
+
+      printf '%s\n' "$((serial + 1))" > "$next_serial_path"
+      printf '%s\n' "$serial"
+    }
+
+    copy_signed_bundle_from_issuance() {
+      local issuance_dir="$1"
+      local basename="$2"
+      local out_dir="$3"
+
+      require_dir "$issuance_dir"
+      mkdir -p "$out_dir"
+      cp "$issuance_dir/$basename.cert.pem" "$out_dir/$basename.cert.pem"
+      cp "$issuance_dir/chain.pem" "$out_dir/chain.pem"
+      cp "$issuance_dir/metadata.json" "$out_dir/metadata.json"
+      cp "$issuance_dir/request.json" "$out_dir/request.json"
+    }
+
+    write_request_record() {
+      local target="$1"
+      local request_id="$2"
+      local request_file="$3"
+      local serial="$4"
+      local recorded_at="$5"
+
+      jq -n \
+        --arg requestId "$request_id" \
+        --arg serial "$serial" \
+        --arg recordedAt "$recorded_at" \
+        --argjson request "$(jq -cS . "$request_file")" \
+        '{
+          schemaVersion: 1,
+          requestId: $requestId,
+          serial: $serial,
+          status: "issued",
+          recordedAt: $recordedAt,
+          request: $request
+        }' > "$target"
+    }
+
+    write_serial_record() {
+      local target="$1"
+      local serial="$2"
+      local request_id="$3"
+      local allocated_at="$4"
+
+      jq -n \
+        --arg serial "$serial" \
+        --arg requestId "$request_id" \
+        --arg allocatedAt "$allocated_at" \
+        '{
+          schemaVersion: 1,
+          serial: $serial,
+          requestId: $requestId,
+          allocatedAt: $allocatedAt,
+          status: "issued"
+        }' > "$target"
+    }
+
+    write_issuance_record() {
+      local target="$1"
+      local serial="$2"
+      local request_id="$3"
+      local request_file="$4"
+      local metadata_file="$5"
+      local issuer_cert="$6"
+      local issued_at="$7"
+
+      jq -n \
+        --arg serial "$serial" \
+        --arg requestId "$request_id" \
+        --arg issuedAt "$issued_at" \
+        --arg issuerSubject "$(certificate_subject "$issuer_cert")" \
+        --arg issuerFingerprint "$(certificate_fingerprint "$issuer_cert")" \
+        --argjson request "$(jq -cS . "$request_file")" \
+        --argjson certificate "$(jq -cS . "$metadata_file")" \
+        '{
+          schemaVersion: 1,
+          serial: $serial,
+          requestId: $requestId,
+          status: "issued",
+          issuedAt: $issuedAt,
+          issuer: {
+            subject: $issuerSubject,
+            sha256Fingerprint: $issuerFingerprint
+          },
+          request: $request,
+          certificate: $certificate
+        }' > "$target"
+    }
+
     usage() {
       cat <<'EOF' >&2
 Usage:
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
-  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH --serial SERIAL [--days DAYS] [--issuer-chain PATH]
+  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
+  pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON]
 EOF
     }
 
@@ -159,6 +321,7 @@ EOF
       local issuer_key=""
       local issuer_cert=""
       local issuer_chain=""
+      local signer_state_dir=""
       local serial=""
       local days=""
 
@@ -184,6 +347,10 @@ EOF
             issuer_chain="$2"
             shift 2
             ;;
+          --signer-state-dir)
+            signer_state_dir="$2"
+            shift 2
+            ;;
           --serial)
             serial="$2"
             shift 2
@@ -202,7 +369,12 @@ EOF
       [ -n "$out_dir" ] || die "--out-dir is required"
       [ -n "$issuer_key" ] || die "--issuer-key is required"
       [ -n "$issuer_cert" ] || die "--issuer-cert is required"
-      [ -n "$serial" ] || die "--serial is required"
+      if [ -n "$signer_state_dir" ] && [ -n "$serial" ]; then
+        die "--serial cannot be combined with --signer-state-dir"
+      fi
+      if [ -z "$signer_state_dir" ] && [ -z "$serial" ]; then
+        die "--serial is required unless --signer-state-dir is provided"
+      fi
 
       require_dir "$request_dir"
       require_file "$issuer_key"
@@ -217,6 +389,9 @@ EOF
       local basename
       local csr_file
       local csr_path
+      local request_id=""
+      local request_record_path=""
+      local issuance_dir=""
       local requested_days
       local bundle_profile
 
@@ -237,6 +412,20 @@ EOF
       if [ -z "$days" ]; then
         [ -n "$requested_days" ] || die "--days is required when request.json does not declare requestedDays"
         days="$requested_days"
+      fi
+
+      if [ -n "$signer_state_dir" ]; then
+        signer_state_init "$signer_state_dir"
+        request_id="$(request_id_for_bundle "$request_file" "$csr_path")"
+        request_record_path="$(signer_state_request_record_path "$signer_state_dir" "$request_id")"
+        if [ -f "$request_record_path" ]; then
+          local existing_serial
+          existing_serial="$(jq -r '.serial // empty' "$request_record_path")"
+          [ -n "$existing_serial" ] || die "Existing request record is missing serial: $request_record_path"
+          copy_signed_bundle_from_issuance "$(signer_state_issuance_dir "$signer_state_dir" "$existing_serial")" "$basename" "$out_dir"
+          return
+        fi
+        serial="$(allocate_serial_from_state "$signer_state_dir")"
       fi
 
       mkdir -p "$out_dir"
@@ -285,6 +474,27 @@ EOF
       write_certificate_metadata "$out_dir/$basename.cert.pem" "$out_dir/metadata.json" "$bundle_profile"
       cp "$request_file" "$out_dir/request.json"
       openssl verify -CAfile "$out_dir/chain.pem" "$out_dir/$basename.cert.pem" >/dev/null
+
+      if [ -n "$signer_state_dir" ]; then
+        local issued_at
+        issued_at="$(current_timestamp_utc)"
+        issuance_dir="$(signer_state_issuance_dir "$signer_state_dir" "$serial")"
+        mkdir -p "$issuance_dir"
+        cp "$request_file" "$issuance_dir/request.json"
+        cp "$csr_path" "$issuance_dir/$csr_file"
+        cp "$out_dir/$basename.cert.pem" "$issuance_dir/$basename.cert.pem"
+        cp "$out_dir/chain.pem" "$issuance_dir/chain.pem"
+        cp "$out_dir/metadata.json" "$issuance_dir/metadata.json"
+        if [ -f "$request_dir/san-manifest.json" ]; then
+          cp "$request_dir/san-manifest.json" "$issuance_dir/san-manifest.json"
+        fi
+        if [ -f "$request_dir/identity-manifest.json" ]; then
+          cp "$request_dir/identity-manifest.json" "$issuance_dir/identity-manifest.json"
+        fi
+        write_request_record "$request_record_path" "$request_id" "$request_file" "$serial" "$issued_at"
+        write_serial_record "$(signer_state_serial_record_path "$signer_state_dir" "$serial")" "$serial" "$request_id" "$issued_at"
+        write_issuance_record "$issuance_dir/issuance.json" "$serial" "$request_id" "$request_file" "$out_dir/metadata.json" "$issuer_cert" "$issued_at"
+      fi
     }
 
     import_signed() {
@@ -379,6 +589,107 @@ EOF
       fi
     }
 
+    revoke_issued() {
+      local signer_state_dir=""
+      local serial=""
+      local reason="unspecified"
+
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --signer-state-dir)
+            signer_state_dir="$2"
+            shift 2
+            ;;
+          --serial)
+            serial="$2"
+            shift 2
+            ;;
+          --reason)
+            reason="$2"
+            shift 2
+            ;;
+          *)
+            die "Unknown revoke-issued argument: $1"
+            ;;
+        esac
+      done
+
+      [ -n "$signer_state_dir" ] || die "--signer-state-dir is required"
+      [ -n "$serial" ] || die "--serial is required"
+      require_dir "$signer_state_dir"
+
+      local issuance_dir
+      local issuance_record_path
+      local request_record_path
+      local serial_record_path
+      local revocation_record_path
+      local request_id
+      local revoked_at
+      local update_tmp
+
+      issuance_dir="$(signer_state_issuance_dir "$signer_state_dir" "$serial")"
+      issuance_record_path="$issuance_dir/issuance.json"
+      serial_record_path="$(signer_state_serial_record_path "$signer_state_dir" "$serial")"
+      revocation_record_path="$(signer_state_revocation_record_path "$signer_state_dir" "$serial")"
+
+      require_dir "$issuance_dir"
+      require_file "$issuance_record_path"
+      require_file "$serial_record_path"
+
+      if [ -f "$revocation_record_path" ]; then
+        die "Serial $serial has already been revoked"
+      fi
+
+      request_id="$(jq -r '.requestId // empty' "$issuance_record_path")"
+      [ -n "$request_id" ] || die "Issuance record is missing requestId: $issuance_record_path"
+      request_record_path="$(signer_state_request_record_path "$signer_state_dir" "$request_id")"
+      require_file "$request_record_path"
+
+      revoked_at="$(current_timestamp_utc)"
+
+      jq -n \
+        --arg serial "$serial" \
+        --arg requestId "$request_id" \
+        --arg reason "$reason" \
+        --arg revokedAt "$revoked_at" \
+        --arg roleId "$(jq -r '.request.roleId // empty' "$issuance_record_path")" \
+        --arg subject "$(jq -r '.certificate.subject // empty' "$issuance_record_path")" \
+        '{
+          schemaVersion: 1,
+          serial: $serial,
+          requestId: $requestId,
+          roleId: $roleId,
+          subject: $subject,
+          reason: $reason,
+          revokedAt: $revokedAt,
+          status: "revoked"
+        }' > "$revocation_record_path"
+
+      update_tmp="$(mktemp)"
+      jq \
+        --arg reason "$reason" \
+        --arg revokedAt "$revoked_at" \
+        '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
+        "$issuance_record_path" > "$update_tmp"
+      mv "$update_tmp" "$issuance_record_path"
+
+      update_tmp="$(mktemp)"
+      jq \
+        --arg reason "$reason" \
+        --arg revokedAt "$revoked_at" \
+        '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
+        "$request_record_path" > "$update_tmp"
+      mv "$update_tmp" "$request_record_path"
+
+      update_tmp="$(mktemp)"
+      jq \
+        --arg reason "$reason" \
+        --arg revokedAt "$revoked_at" \
+        '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
+        "$serial_record_path" > "$update_tmp"
+      mv "$update_tmp" "$serial_record_path"
+    }
+
     [ "$#" -gt 0 ] || {
       usage
       exit 2
@@ -396,6 +707,9 @@ EOF
         ;;
       import-signed)
         import_signed "$@"
+        ;;
+      revoke-issued)
+        revoke_issued "$@"
         ;;
       -h|--help|help)
         usage

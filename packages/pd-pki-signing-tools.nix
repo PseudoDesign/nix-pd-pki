@@ -84,6 +84,39 @@ pkgs.writeShellApplication {
       date -u +"%Y-%m-%dT%H:%M:%SZ"
     }
 
+    current_timestamp_compact_utc() {
+      date -u +"%Y%m%dT%H%M%SZ"
+    }
+
+    csr_public_key_algorithm() {
+      local csr_path="$1"
+      openssl req -in "$csr_path" -noout -text |
+        sed -n 's/^[[:space:]]*Public Key Algorithm: //p' |
+        head -n1
+    }
+
+    csr_rsa_bits() {
+      local csr_path="$1"
+      openssl req -in "$csr_path" -noout -text |
+        sed -n 's/.*Public-Key: (\([0-9][0-9]*\) bit).*/\1/p' |
+        head -n1
+    }
+
+    csr_key_type() {
+      local csr_path="$1"
+      local algorithm=""
+
+      algorithm="$(csr_public_key_algorithm "$csr_path")"
+      case "$algorithm" in
+        rsaEncryption) printf '%s\n' "RSA" ;;
+        id-ecPublicKey) printf '%s\n' "EC" ;;
+        *)
+          [ -n "$algorithm" ] || die "Unable to determine CSR public key algorithm: $csr_path"
+          printf '%s\n' "$algorithm"
+          ;;
+      esac
+    }
+
     canonicalize_hex_serial() {
       local serial="$1"
 
@@ -175,6 +208,7 @@ pkgs.writeShellApplication {
     signer_state_init() {
       local state_dir="$1"
       mkdir -p \
+        "$state_dir/audit" \
         "$state_dir/crls" \
         "$state_dir/issuances" \
         "$state_dir/requests" \
@@ -222,6 +256,19 @@ pkgs.writeShellApplication {
     signer_state_current_crl_path() {
       local state_dir="$1"
       printf '%s\n' "$state_dir/crls/current.pem"
+    }
+
+    signer_state_audit_dir() {
+      local state_dir="$1"
+      printf '%s\n' "$state_dir/audit"
+    }
+
+    signer_state_audit_event_path() {
+      local state_dir="$1"
+      local timestamp="$2"
+      local event_type="$3"
+      local identifier="$4"
+      printf '%s\n' "$(signer_state_audit_dir "$state_dir")/''${timestamp}-''${event_type}-''${identifier}.json"
     }
 
     signer_state_crl_metadata_path() {
@@ -436,6 +483,112 @@ pkgs.writeShellApplication {
       esac
     }
 
+    validate_csr_against_policy() {
+      local csr_path="$1"
+      local role="$2"
+      local policy_file="$3"
+      local actual_key_type=""
+      local minimum_rsa_bits=""
+      local actual_rsa_bits=""
+      local allowed_key_types=()
+
+      [ -n "$policy_file" ] || return 0
+
+      actual_key_type="$(csr_key_type "$csr_path")"
+      mapfile -t allowed_key_types < <(jq -r --arg role "$role" '(.roles[$role].allowedKeyAlgorithms // [])[]' "$policy_file")
+      if [ "''${#allowed_key_types[@]}" -gt 0 ] && ! value_in_list "$actual_key_type" "''${allowed_key_types[@]}"; then
+        die "Signer policy rejected CSR key algorithm '$actual_key_type' for role $role"
+      fi
+
+      minimum_rsa_bits="$(jq -r --arg role "$role" '.roles[$role].minimumRsaBits // empty' "$policy_file")"
+      if [ -n "$minimum_rsa_bits" ]; then
+        validate_unsigned_decimal "$minimum_rsa_bits" "Signer policy minimumRsaBits"
+        [ "$actual_key_type" = "RSA" ] || die "Signer policy minimumRsaBits requires an RSA CSR for role $role"
+        actual_rsa_bits="$(csr_rsa_bits "$csr_path")"
+        validate_unsigned_decimal "$actual_rsa_bits" "CSR RSA bit length"
+        [ "$actual_rsa_bits" -ge "$minimum_rsa_bits" ] ||
+          die "CSR RSA bit length of $actual_rsa_bits is below signer policy minimumRsaBits $minimum_rsa_bits for role $role"
+      fi
+    }
+
+    validate_request_matches_csr() {
+      local request_file="$1"
+      local csr_path="$2"
+      local role="$3"
+
+      case "$role" in
+        intermediate-signing-authority)
+          validate_intermediate_csr_matches_request "$csr_path" "$request_file" ||
+            die "CSR subject or CA constraints do not match request.json for role $role"
+          ;;
+        openvpn-server-leaf|openvpn-client-leaf)
+          validate_tls_csr_matches_request "$csr_path" "$request_file" ||
+            die "CSR subject, SANs, or profile do not match request.json for role $role"
+          ;;
+        *)
+          die "Unsupported role in CSR request validation: $role"
+          ;;
+      esac
+    }
+
+    resolve_crl_distribution_points() {
+      local role="$1"
+      local policy_file="$2"
+
+      [ -n "$policy_file" ] || return 0
+
+      jq -r --arg role "$role" '
+        (.roles[$role].crlDistributionPoints // [])
+        | map(select(type == "string" and length > 0) | "URI:" + .)
+        | join(",")
+      ' "$policy_file"
+    }
+
+    build_approval_json() {
+      local approved_by="$1"
+      local approved_at="$2"
+      local approval_ticket="$3"
+      local approval_note="$4"
+
+      jq -nc \
+        --arg approvedBy "$approved_by" \
+        --arg approvedAt "$approved_at" \
+        --arg approvalTicket "$approval_ticket" \
+        --arg approvalNote "$approval_note" \
+        '
+          {
+            approvedBy: $approvedBy,
+            approvedAt: $approvedAt
+          }
+          + (if $approvalTicket != "" then { approvalTicket: $approvalTicket } else {} end)
+          + (if $approvalNote != "" then { approvalNote: $approvalNote } else {} end)
+        '
+    }
+
+    build_revocation_json() {
+      local revoked_by="$1"
+      local revoked_at="$2"
+      local reason="$3"
+      local revocation_ticket="$4"
+      local revocation_note="$5"
+
+      jq -nc \
+        --arg revokedBy "$revoked_by" \
+        --arg revokedAt "$revoked_at" \
+        --arg reason "$reason" \
+        --arg revocationTicket "$revocation_ticket" \
+        --arg revocationNote "$revocation_note" \
+        '
+          {
+            revokedBy: $revokedBy,
+            revokedAt: $revokedAt,
+            reason: $reason
+          }
+          + (if $revocationTicket != "" then { revocationTicket: $revocationTicket } else {} end)
+          + (if $revocationNote != "" then { revocationNote: $revocationNote } else {} end)
+        '
+    }
+
     copy_signed_bundle_from_issuance() {
       local issuance_dir="$1"
       local basename="$2"
@@ -455,11 +608,13 @@ pkgs.writeShellApplication {
       local request_file="$3"
       local serial="$4"
       local recorded_at="$5"
+      local approval_json="$6"
 
       jq -n \
         --arg requestId "$request_id" \
         --arg serial "$serial" \
         --arg recordedAt "$recorded_at" \
+        --argjson approval "$approval_json" \
         --argjson request "$(jq -cS . "$request_file")" \
         '{
           schemaVersion: 1,
@@ -467,6 +622,7 @@ pkgs.writeShellApplication {
           serial: $serial,
           status: "issued",
           recordedAt: $recordedAt,
+          approval: $approval,
           request: $request
         }' > "$target"
     }
@@ -476,16 +632,19 @@ pkgs.writeShellApplication {
       local serial="$2"
       local request_id="$3"
       local allocated_at="$4"
+      local approval_json="$5"
 
       jq -n \
         --arg serial "$serial" \
         --arg requestId "$request_id" \
         --arg allocatedAt "$allocated_at" \
+        --argjson approval "$approval_json" \
         '{
           schemaVersion: 1,
           serial: $serial,
           requestId: $requestId,
           allocatedAt: $allocatedAt,
+          approval: $approval,
           status: "issued"
         }' > "$target"
     }
@@ -498,6 +657,7 @@ pkgs.writeShellApplication {
       local metadata_file="$5"
       local issuer_cert="$6"
       local issued_at="$7"
+      local approval_json="$8"
 
       jq -n \
         --arg serial "$serial" \
@@ -505,6 +665,7 @@ pkgs.writeShellApplication {
         --arg issuedAt "$issued_at" \
         --arg issuerSubject "$(certificate_subject "$issuer_cert")" \
         --arg issuerFingerprint "$(certificate_fingerprint "$issuer_cert")" \
+        --argjson approval "$approval_json" \
         --argjson request "$(jq -cS . "$request_file")" \
         --argjson certificate "$(jq -cS . "$metadata_file")" \
         '{
@@ -513,12 +674,77 @@ pkgs.writeShellApplication {
           requestId: $requestId,
           status: "issued",
           issuedAt: $issuedAt,
+          approval: $approval,
           issuer: {
             subject: $issuerSubject,
             sha256Fingerprint: $issuerFingerprint
           },
           request: $request,
           certificate: $certificate
+        }' > "$target"
+    }
+
+    write_issuance_audit_event() {
+      local target="$1"
+      local serial="$2"
+      local request_id="$3"
+      local request_file="$4"
+      local metadata_file="$5"
+      local issuer_cert="$6"
+      local recorded_at="$7"
+      local approval_json="$8"
+
+      jq -n \
+        --arg eventType "issued" \
+        --arg recordedAt "$recorded_at" \
+        --arg serial "$serial" \
+        --arg requestId "$request_id" \
+        --arg issuerSubject "$(certificate_subject "$issuer_cert")" \
+        --arg issuerFingerprint "$(certificate_fingerprint "$issuer_cert")" \
+        --argjson approval "$approval_json" \
+        --argjson request "$(jq -cS . "$request_file")" \
+        --argjson certificate "$(jq -cS . "$metadata_file")" \
+        '{
+          schemaVersion: 1,
+          eventType: $eventType,
+          recordedAt: $recordedAt,
+          serial: $serial,
+          requestId: $requestId,
+          approval: $approval,
+          issuer: {
+            subject: $issuerSubject,
+            sha256Fingerprint: $issuerFingerprint
+          },
+          request: $request,
+          certificate: $certificate
+        }' > "$target"
+    }
+
+    write_revocation_audit_event() {
+      local target="$1"
+      local serial="$2"
+      local request_id="$3"
+      local issuance_record_path="$4"
+      local revocation_json="$5"
+      local recorded_at="$6"
+
+      jq -n \
+        --arg eventType "revoked" \
+        --arg recordedAt "$recorded_at" \
+        --arg serial "$serial" \
+        --arg requestId "$request_id" \
+        --argjson revocation "$revocation_json" \
+        --arg roleId "$(jq -r '.request.roleId // empty' "$issuance_record_path")" \
+        --arg subject "$(jq -r '.certificate.subject // empty' "$issuance_record_path")" \
+        '{
+          schemaVersion: 1,
+          eventType: $eventType,
+          recordedAt: $recordedAt,
+          serial: $serial,
+          requestId: $requestId,
+          roleId: $roleId,
+          subject: $subject,
+          revocation: $revocation
         }' > "$target"
     }
 
@@ -558,10 +784,10 @@ pkgs.writeShellApplication {
       cat <<'EOF' >&2
 Usage:
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
-  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--serial SERIAL | --signer-state-dir DIR]
+  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--approved-by ID] [--approval-ticket ID] [--approval-note TEXT] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
   pd-pki-signing-tools generate-crl --signer-state-dir DIR --issuer-key PATH --issuer-cert PATH --out-dir DIR [--days DAYS]
-  pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON]
+  pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON] [--revoked-by ID] [--revocation-ticket ID] [--revocation-note TEXT]
 EOF
     }
 
@@ -640,6 +866,9 @@ EOF
       local serial=""
       local days=""
       local policy_file=""
+      local approved_by=""
+      local approval_ticket=""
+      local approval_note=""
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -679,6 +908,18 @@ EOF
             policy_file="$2"
             shift 2
             ;;
+          --approved-by)
+            approved_by="$2"
+            shift 2
+            ;;
+          --approval-ticket)
+            approval_ticket="$2"
+            shift 2
+            ;;
+          --approval-note)
+            approval_note="$2"
+            shift 2
+            ;;
           *)
             die "Unknown sign-request argument: $1"
             ;;
@@ -697,6 +938,9 @@ EOF
       fi
       if [ -n "$signer_state_dir" ] && [ -z "$policy_file" ]; then
         die "--policy-file is required when --signer-state-dir is provided"
+      fi
+      if [ -n "$signer_state_dir" ] && [ -z "$approved_by" ]; then
+        die "--approved-by is required when --signer-state-dir is provided"
       fi
 
       require_dir "$request_dir"
@@ -719,6 +963,9 @@ EOF
       local issuance_dir=""
       local bundle_profile
       local signer_lock_fd=""
+      local approval_recorded_at=""
+      local approval_json=""
+      local crl_distribution_points=""
 
       role="$(jq -r '.roleId // empty' "$request_file")"
       basename="$(jq -r '.basename // empty' "$request_file")"
@@ -735,10 +982,15 @@ EOF
 
       validate_request_kind_for_role "$role" "$request_file"
       validate_request_against_policy "$request_file" "$role" "$policy_file"
+      validate_csr_against_policy "$csr_path" "$role" "$policy_file"
+      validate_request_matches_csr "$request_file" "$csr_path" "$role"
       days="$(resolve_signing_days "$request_file" "$role" "$days" "$policy_file")"
+      crl_distribution_points="$(resolve_crl_distribution_points "$role" "$policy_file")"
 
       if [ -n "$signer_state_dir" ]; then
         acquire_signer_state_lock "$signer_state_dir" signer_lock_fd
+        approval_recorded_at="$(current_timestamp_utc)"
+        approval_json="$(build_approval_json "$approved_by" "$approval_recorded_at" "$approval_ticket" "$approval_note")"
         request_id="$(request_id_for_bundle "$request_file" "$csr_path")"
         request_record_path="$(signer_state_request_record_path "$signer_state_dir" "$request_id")"
         if [ -f "$request_record_path" ]; then
@@ -780,7 +1032,8 @@ EOF
             "$days" \
             "$issuer_key" \
             "$issuer_cert" \
-            "$issuer_chain"
+            "$issuer_chain" \
+            "$crl_distribution_points"
           ;;
         openvpn-server-leaf|openvpn-client-leaf)
           local san_spec
@@ -799,7 +1052,8 @@ EOF
             "$days" \
             "$issuer_key" \
             "$issuer_cert" \
-            "$issuer_chain"
+            "$issuer_chain" \
+            "$crl_distribution_points"
           ;;
         *)
           die "Unsupported role for sign-request: $role"
@@ -828,9 +1082,18 @@ EOF
         if [ -f "$request_dir/identity-manifest.json" ]; then
           cp "$request_dir/identity-manifest.json" "$issuance_dir/identity-manifest.json"
         fi
-        write_request_record "$request_record_path" "$request_id" "$request_file" "$cert_serial" "$issued_at"
-        write_serial_record "$(signer_state_serial_record_path "$signer_state_dir" "$cert_serial")" "$cert_serial" "$request_id" "$issued_at"
-        write_issuance_record "$issuance_dir/issuance.json" "$cert_serial" "$request_id" "$request_file" "$out_dir/metadata.json" "$issuer_cert" "$issued_at"
+        write_request_record "$request_record_path" "$request_id" "$request_file" "$cert_serial" "$issued_at" "$approval_json"
+        write_serial_record "$(signer_state_serial_record_path "$signer_state_dir" "$cert_serial")" "$cert_serial" "$request_id" "$issued_at" "$approval_json"
+        write_issuance_record "$issuance_dir/issuance.json" "$cert_serial" "$request_id" "$request_file" "$out_dir/metadata.json" "$issuer_cert" "$issued_at" "$approval_json"
+        write_issuance_audit_event \
+          "$(signer_state_audit_event_path "$signer_state_dir" "$(current_timestamp_compact_utc)" "issued" "$cert_serial")" \
+          "$cert_serial" \
+          "$request_id" \
+          "$request_file" \
+          "$out_dir/metadata.json" \
+          "$issuer_cert" \
+          "$issued_at" \
+          "$approval_json"
         close_locked_fd "$signer_lock_fd"
       fi
     }
@@ -1091,6 +1354,9 @@ EOF
       local signer_state_dir=""
       local serial=""
       local reason="unspecified"
+      local revoked_by=""
+      local revocation_ticket=""
+      local revocation_note=""
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1106,6 +1372,18 @@ EOF
             reason="$2"
             shift 2
             ;;
+          --revoked-by)
+            revoked_by="$2"
+            shift 2
+            ;;
+          --revocation-ticket)
+            revocation_ticket="$2"
+            shift 2
+            ;;
+          --revocation-note)
+            revocation_note="$2"
+            shift 2
+            ;;
           *)
             die "Unknown revoke-issued argument: $1"
             ;;
@@ -1114,6 +1392,7 @@ EOF
 
       [ -n "$signer_state_dir" ] || die "--signer-state-dir is required"
       [ -n "$serial" ] || die "--serial is required"
+      [ -n "$revoked_by" ] || die "--revoked-by is required"
       require_dir "$signer_state_dir"
       validate_crl_reason "$reason"
 
@@ -1126,6 +1405,7 @@ EOF
       local revoked_at
       local update_tmp
       local signer_lock_fd=""
+      local revocation_json=""
 
       acquire_signer_state_lock "$signer_state_dir" signer_lock_fd
       serial="$(signer_state_resolve_serial "$signer_state_dir" "$serial")"
@@ -1149,48 +1429,54 @@ EOF
       require_file "$request_record_path"
 
       revoked_at="$(current_timestamp_utc)"
+      revocation_json="$(build_revocation_json "$revoked_by" "$revoked_at" "$reason" "$revocation_ticket" "$revocation_note")"
 
       jq -n \
         --arg serial "$serial" \
         --arg requestId "$request_id" \
-        --arg reason "$reason" \
-        --arg revokedAt "$revoked_at" \
         --arg roleId "$(jq -r '.request.roleId // empty' "$issuance_record_path")" \
         --arg subject "$(jq -r '.certificate.subject // empty' "$issuance_record_path")" \
+        --argjson revocation "$revocation_json" \
         '{
           schemaVersion: 1,
           serial: $serial,
           requestId: $requestId,
           roleId: $roleId,
           subject: $subject,
-          reason: $reason,
-          revokedAt: $revokedAt,
+          reason: $revocation.reason,
+          revokedAt: $revocation.revokedAt,
+          revocation: $revocation,
           status: "revoked"
         }' > "$revocation_record_path"
 
       update_tmp="$(mktemp)"
       jq \
-        --arg reason "$reason" \
-        --arg revokedAt "$revoked_at" \
-        '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
+        --argjson revocation "$revocation_json" \
+        '.status = "revoked" | .revocation = $revocation' \
         "$issuance_record_path" > "$update_tmp"
       mv "$update_tmp" "$issuance_record_path"
 
       update_tmp="$(mktemp)"
       jq \
-        --arg reason "$reason" \
-        --arg revokedAt "$revoked_at" \
-        '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
+        --argjson revocation "$revocation_json" \
+        '.status = "revoked" | .revocation = $revocation' \
         "$request_record_path" > "$update_tmp"
       mv "$update_tmp" "$request_record_path"
 
       update_tmp="$(mktemp)"
       jq \
-        --arg reason "$reason" \
-        --arg revokedAt "$revoked_at" \
-        '.status = "revoked" | .revocation = { reason: $reason, revokedAt: $revokedAt }' \
+        --argjson revocation "$revocation_json" \
+        '.status = "revoked" | .revocation = $revocation' \
         "$serial_record_path" > "$update_tmp"
       mv "$update_tmp" "$serial_record_path"
+
+      write_revocation_audit_event \
+        "$(signer_state_audit_event_path "$signer_state_dir" "$(current_timestamp_compact_utc)" "revoked" "$serial")" \
+        "$serial" \
+        "$request_id" \
+        "$issuance_record_path" \
+        "$revocation_json" \
+        "$revoked_at"
       close_locked_fd "$signer_lock_fd"
     }
 

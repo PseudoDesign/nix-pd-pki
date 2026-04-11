@@ -30,11 +30,10 @@
         nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
     in
     {
-      define = definitions;
-
       inherit nixosModules;
 
       lib = {
+        inherit definitions;
         roles = definitions.roleMap;
         roleCount = definitions.roleCount;
         stepCount = definitions.stepCount;
@@ -71,6 +70,9 @@
           test-report = {
             type = "app";
             program = "${appPackages.testReport}/bin/test-report";
+            meta = {
+              description = "Run all exported pd-pki checks and write Markdown/JSON test reports.";
+            };
           };
         }
       );

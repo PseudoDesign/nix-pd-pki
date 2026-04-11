@@ -87,6 +87,79 @@ install_candidate_artifact() {
   mv -f "$target_tmp" "$target_path"
 }
 
+artifact_set_digest() {
+  local path=""
+
+  {
+    for path in "$@"; do
+      if [ -f "$path" ]; then
+        printf 'file\t%s\t%s\n' "$path" "$(sha256sum "$path" | cut -d' ' -f1)"
+      else
+        printf 'missing\t%s\n' "$path"
+      fi
+    done
+  } | sha256sum | cut -d' ' -f1
+}
+
+reload_systemd_units() {
+  local mode="$1"
+  shift
+
+  [ "$#" -gt 0 ] || return 0
+
+  case "$mode" in
+    reload)
+      systemctl reload "$@"
+      ;;
+    restart)
+      systemctl try-restart "$@"
+      ;;
+    reload-or-restart)
+      systemctl try-reload-or-restart "$@"
+      ;;
+    *)
+      printf '%s\n' "Unsupported consumer reload mode: $mode" >&2
+      return 1
+      ;;
+  esac
+}
+
+generate_private_key() {
+  local key_path="$1"
+  local key_algorithm="${2:-rsa}"
+  local key_parameter="${3:-3072}"
+
+  case "$key_algorithm" in
+    rsa)
+      case "$key_parameter" in
+        *[!0-9]*|'')
+          printf '%s\n' "RSA key parameter must be an unsigned decimal bit length" >&2
+          return 1
+          ;;
+      esac
+      openssl genpkey -algorithm RSA -pkeyopt "rsa_keygen_bits:${key_parameter}" -out "$key_path"
+      ;;
+    ec-p256)
+      openssl genpkey \
+        -algorithm EC \
+        -pkeyopt ec_paramgen_curve:prime256v1 \
+        -pkeyopt ec_param_enc:named_curve \
+        -out "$key_path"
+      ;;
+    ec-p384)
+      openssl genpkey \
+        -algorithm EC \
+        -pkeyopt ec_paramgen_curve:secp384r1 \
+        -pkeyopt ec_param_enc:named_curve \
+        -out "$key_path"
+      ;;
+    *)
+      printf '%s\n' "Unsupported key algorithm: $key_algorithm" >&2
+      return 1
+      ;;
+  esac
+}
+
 certificate_subject() {
   local certificate="$1"
   openssl x509 -in "$certificate" -noout -subject | sed 's/^subject=//'
@@ -179,6 +252,11 @@ certificate_subject_rfc2253() {
   openssl x509 -in "$certificate" -noout -subject -nameopt RFC2253 | sed 's/^subject=//'
 }
 
+csr_subject_rfc2253() {
+  local csr_path="$1"
+  openssl req -in "$csr_path" -noout -subject -nameopt RFC2253 | sed 's/^subject=//'
+}
+
 certificate_issuer_rfc2253() {
   local certificate="$1"
   openssl x509 -in "$certificate" -noout -issuer -nameopt RFC2253 | sed 's/^issuer=//'
@@ -187,6 +265,11 @@ certificate_issuer_rfc2253() {
 certificate_common_name() {
   local certificate="$1"
   certificate_subject_rfc2253 "$certificate" | sed -n 's/.*CN=\([^,]*\).*/\1/p'
+}
+
+csr_common_name() {
+  local csr_path="$1"
+  csr_subject_rfc2253 "$csr_path" | sed -n 's/.*CN=\([^,]*\).*/\1/p'
 }
 
 crl_issuer_rfc2253() {
@@ -229,6 +312,25 @@ write_certificate_subject_alt_names() {
   ext_output="$(mktemp)"
   if openssl x509 -in "$certificate" -noout -ext subjectAltName > "$ext_output" 2>/dev/null; then
     sed '1d' "$ext_output" |
+      tr ',' '\n' |
+      sed -e 's/^[[:space:]]*//' -e 's/^IP Address:/IP:/' |
+      grep -v '^$' |
+      sort -u > "$target"
+  else
+    : > "$target"
+  fi
+  rm -f "$ext_output"
+}
+
+write_csr_subject_alt_names() {
+  local csr_path="$1"
+  local target="$2"
+  local ext_output=""
+
+  ext_output="$(mktemp)"
+  if openssl req -in "$csr_path" -noout -text > "$ext_output" 2>/dev/null && grep -q "Subject Alternative Name" "$ext_output"; then
+    grep -A1 "Subject Alternative Name" "$ext_output" |
+      tail -n1 |
       tr ',' '\n' |
       sed -e 's/^[[:space:]]*//' -e 's/^IP Address:/IP:/' |
       grep -v '^$' |
@@ -322,6 +424,39 @@ validate_certificate_subject_alt_names_match_request() {
   rm -f "$certificate_sans" "$request_sans"
 }
 
+validate_csr_common_name_matches_request() {
+  local csr_path="$1"
+  local request_path="$2"
+  local expected_common_name=""
+  local actual_common_name=""
+
+  expected_common_name="$(jq -r '.commonName // empty' "$request_path")"
+  actual_common_name="$(csr_common_name "$csr_path")"
+  [ -n "$expected_common_name" ] || return 1
+  [ "$actual_common_name" = "$expected_common_name" ]
+}
+
+validate_csr_subject_alt_names_match_request() {
+  local csr_path="$1"
+  local request_path="$2"
+  local csr_sans=""
+  local request_sans=""
+  local csr_sans_hash=""
+  local request_sans_hash=""
+
+  csr_sans="$(mktemp)"
+  request_sans="$(mktemp)"
+  write_csr_subject_alt_names "$csr_path" "$csr_sans"
+  write_request_subject_alt_names "$request_path" "$request_sans"
+  csr_sans_hash="$(sha256sum "$csr_sans" | cut -d' ' -f1)"
+  request_sans_hash="$(sha256sum "$request_sans" | cut -d' ' -f1)"
+  if [ "$csr_sans_hash" != "$request_sans_hash" ]; then
+    rm -f "$csr_sans" "$request_sans"
+    return 1
+  fi
+  rm -f "$csr_sans" "$request_sans"
+}
+
 validate_tls_certificate_profile() {
   local certificate="$1"
   local requested_profile="$2"
@@ -334,6 +469,69 @@ validate_tls_certificate_profile() {
   esac
 
   [ "$(certificate_extended_key_usage_text "$certificate")" = "$expected_eku" ]
+}
+
+csr_is_ca() {
+  local csr_path="$1"
+  openssl req -in "$csr_path" -noout -text |
+    grep -A1 "Basic Constraints" |
+    grep -q "CA:TRUE"
+}
+
+csr_pathlen() {
+  local csr_path="$1"
+  openssl req -in "$csr_path" -noout -text |
+    grep -A1 "Basic Constraints" |
+    grep -o 'pathlen:[0-9]\+' |
+    cut -d: -f2
+}
+
+csr_extended_key_usage_text() {
+  local csr_path="$1"
+  openssl req -in "$csr_path" -noout -text |
+    grep -A1 "Extended Key Usage" |
+    tail -n1 |
+    sed 's/^[[:space:]]*//'
+}
+
+validate_tls_csr_profile() {
+  local csr_path="$1"
+  local requested_profile="$2"
+  local expected_eku=""
+
+  case "$requested_profile" in
+    serverAuth) expected_eku="TLS Web Server Authentication" ;;
+    clientAuth) expected_eku="TLS Web Client Authentication" ;;
+    *) return 1 ;;
+  esac
+
+  [ "$(csr_extended_key_usage_text "$csr_path")" = "$expected_eku" ]
+}
+
+validate_tls_csr_matches_request() {
+  local csr_path="$1"
+  local request_path="$2"
+  local requested_profile=""
+
+  validate_csr_common_name_matches_request "$csr_path" "$request_path" || return 1
+  validate_csr_subject_alt_names_match_request "$csr_path" "$request_path" || return 1
+  requested_profile="$(jq -r '.requestedProfile // empty' "$request_path")"
+  [ -n "$requested_profile" ] || return 1
+  validate_tls_csr_profile "$csr_path" "$requested_profile"
+}
+
+validate_intermediate_csr_matches_request() {
+  local csr_path="$1"
+  local request_path="$2"
+  local expected_pathlen=""
+  local actual_pathlen=""
+
+  validate_csr_common_name_matches_request "$csr_path" "$request_path" || return 1
+  csr_is_ca "$csr_path" || return 1
+  expected_pathlen="$(jq -r '(.pathLen // empty) | tostring' "$request_path")"
+  actual_pathlen="$(csr_pathlen "$csr_path")"
+  [ -n "$expected_pathlen" ] || return 1
+  [ "$actual_pathlen" = "$expected_pathlen" ]
 }
 
 validate_root_runtime_import_state() {
@@ -529,6 +727,8 @@ generate_self_signed_ca() {
   local serial="$4"
   local days="$5"
   local pathlen="$6"
+  local key_algorithm="${7:-rsa}"
+  local key_parameter="${8:-3072}"
 
   local key_path="${artifacts_dir}/${basename}.key.pem"
   local csr_path="${artifacts_dir}/${basename}.csr.pem"
@@ -544,7 +744,7 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 EOF
 
-  openssl genrsa -out "$key_path" 2048
+  generate_private_key "$key_path" "$key_algorithm" "$key_parameter"
   openssl req -new -sha256 -key "$key_path" -subj "/CN=${common_name}" -out "$csr_path"
   openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \
@@ -559,6 +759,9 @@ generate_ca_request() {
   local basename="$2"
   local common_name="$3"
   local pathlen="$4"
+  local key_algorithm="${5:-rsa}"
+  local key_parameter="${6:-3072}"
+  local existing_key_path="${7:-}"
 
   local key_path="${artifacts_dir}/${basename}.key.pem"
   local csr_path="${artifacts_dir}/${basename}.csr.pem"
@@ -580,7 +783,14 @@ keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 EOF
 
-  openssl genrsa -out "$key_path" 2048
+  if [ -n "$existing_key_path" ]; then
+    if [ "$existing_key_path" != "$key_path" ]; then
+      cp "$existing_key_path" "$key_path"
+    fi
+    chmod 600 "$key_path"
+  else
+    generate_private_key "$key_path" "$key_algorithm" "$key_parameter"
+  fi
   openssl req -new -sha256 -key "$key_path" -config "$config_path" -out "$csr_path"
 }
 
@@ -593,6 +803,9 @@ generate_signed_ca() {
   local pathlen="$6"
   local issuer_key="$7"
   local issuer_cert="$8"
+  local key_algorithm="${9:-rsa}"
+  local key_parameter="${10:-3072}"
+  local crl_distribution_points="${11:-}"
 
   local key_path="${artifacts_dir}/${basename}.key.pem"
   local csr_path="${artifacts_dir}/${basename}.csr.pem"
@@ -608,8 +821,11 @@ keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 EOF
+  if [ -n "$crl_distribution_points" ]; then
+    printf '%s\n' "crlDistributionPoints = ${crl_distribution_points}" >> "$ext_path"
+  fi
 
-  openssl genrsa -out "$key_path" 2048
+  generate_private_key "$key_path" "$key_algorithm" "$key_parameter"
   openssl req -new -sha256 -key "$key_path" -subj "/CN=${common_name}" -out "$csr_path"
   openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \
@@ -627,6 +843,9 @@ generate_tls_request() {
   local common_name="$3"
   local san_spec="$4"
   local profile="$5"
+  local key_algorithm="${6:-rsa}"
+  local key_parameter="${7:-3072}"
+  local existing_key_path="${8:-}"
 
   local key_path="${artifacts_dir}/${basename}.key.pem"
   local csr_path="${artifacts_dir}/${basename}.csr.pem"
@@ -649,7 +868,14 @@ extendedKeyUsage = ${profile}
 subjectAltName = ${san_spec}
 EOF
 
-  openssl genrsa -out "$key_path" 2048
+  if [ -n "$existing_key_path" ]; then
+    if [ "$existing_key_path" != "$key_path" ]; then
+      cp "$existing_key_path" "$key_path"
+    fi
+    chmod 600 "$key_path"
+  else
+    generate_private_key "$key_path" "$key_algorithm" "$key_parameter"
+  fi
   openssl req -new -sha256 -key "$key_path" -config "$config_path" -out "$csr_path"
 }
 
@@ -664,6 +890,7 @@ sign_tls_certificate() {
   local issuer_key="$8"
   local issuer_cert="$9"
   local root_cert="${10}"
+  local crl_distribution_points="${11:-}"
 
   local cert_path="${artifacts_dir}/${basename}.cert.pem"
   local chain_path="${artifacts_dir}/chain.pem"
@@ -679,6 +906,9 @@ subjectAltName = ${san_spec}
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 EOF
+  if [ -n "$crl_distribution_points" ]; then
+    printf '%s\n' "crlDistributionPoints = ${crl_distribution_points}" >> "$ext_path"
+  fi
 
   openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \
@@ -700,6 +930,7 @@ sign_ca_request() {
   local issuer_key="$7"
   local issuer_cert="$8"
   local issuer_chain="${9:-}"
+  local crl_distribution_points="${10:-}"
 
   local cert_path="${artifacts_dir}/${basename}.cert.pem"
   local chain_path="${artifacts_dir}/chain.pem"
@@ -713,6 +944,9 @@ keyUsage = critical, keyCertSign, cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 EOF
+  if [ -n "$crl_distribution_points" ]; then
+    printf '%s\n' "crlDistributionPoints = ${crl_distribution_points}" >> "$ext_path"
+  fi
 
   openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \
@@ -735,6 +969,7 @@ sign_tls_request() {
   local issuer_key="$8"
   local issuer_cert="$9"
   local issuer_chain="${10:-}"
+  local crl_distribution_points="${11:-}"
 
   local cert_path="${artifacts_dir}/${basename}.cert.pem"
   local chain_path="${artifacts_dir}/chain.pem"
@@ -750,6 +985,9 @@ subjectAltName = ${san_spec}
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 EOF
+  if [ -n "$crl_distribution_points" ]; then
+    printf '%s\n' "crlDistributionPoints = ${crl_distribution_points}" >> "$ext_path"
+  fi
 
   openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \

@@ -7,6 +7,13 @@ let
     packagePath = ../packages/root-certificate-authority.nix;
   };
   cfg = config.services.pd-pki.roles.rootCertificateAuthority;
+  refreshSourcePaths = builtins.filter (path: path != null) [
+    cfg.keySourcePath
+    cfg.csrSourcePath
+    cfg.certificateSourcePath
+    cfg.crlSourcePath
+    cfg.metadataSourcePath
+  ];
   runtimePaths = {
     directory = cfg.stateDir;
     key = "${cfg.stateDir}/root-ca.key.pem";
@@ -33,6 +40,10 @@ let
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
     crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
     metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
+    consumer_reload_mode=${lib.escapeShellArg cfg.reloadMode}
+    managed_digest_before=""
+    managed_digest_after=""
+    consumer_units=(${lib.concatMapStringsSep " " lib.escapeShellArg cfg.reloadUnits})
     import_workdir=""
 
     trap 'rm -rf "$import_workdir"' EXIT
@@ -51,6 +62,7 @@ let
     candidate_cert_path="$candidate_dir/root-ca.cert.pem"
     candidate_crl_path="$candidate_dir/crl.pem"
     candidate_metadata_path="$candidate_dir/root-ca.metadata.json"
+    managed_digest_before="$(artifact_set_digest "$cert_path" "$crl_path" "$metadata_path")"
 
     prepare_candidate_artifact "$key_path" "$key_source_path" "$candidate_key_path" 600
     prepare_candidate_artifact "$csr_path" "$csr_source_path" "$candidate_csr_path" 644
@@ -75,6 +87,11 @@ let
     install_candidate_artifact "$candidate_cert_path" "$cert_path" 644
     install_candidate_artifact "$candidate_crl_path" "$crl_path" 644
     install_candidate_artifact "$candidate_metadata_path" "$metadata_path" 644
+
+    managed_digest_after="$(artifact_set_digest "$cert_path" "$crl_path" "$metadata_path")"
+    if [ "$managed_digest_before" != "$managed_digest_after" ] && [ "''${#consumer_units[@]}" -gt 0 ]; then
+      reload_systemd_units "$consumer_reload_mode" "''${consumer_units[@]}"
+    fi
   '';
 in
 {
@@ -94,6 +111,35 @@ in
       default = true;
       description = ''
         Whether to run the runtime initialization service for the root role.
+      '';
+    };
+
+    refreshInterval = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "5m";
+      description = ''
+        How often to re-run runtime validation and staging when imported artifacts are expected.
+        Set to `null` to disable automatic refresh.
+      '';
+    };
+
+    reloadUnits = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Optional systemd units to reload or restart after new validated root artifacts are staged.
+      '';
+    };
+
+    reloadMode = lib.mkOption {
+      type = lib.types.enum [
+        "reload"
+        "restart"
+        "reload-or-restart"
+      ];
+      default = "reload-or-restart";
+      description = ''
+        How to apply refreshes to units listed in `reloadUnits`.
       '';
     };
 
@@ -157,12 +203,41 @@ in
         pkgs.coreutils
         pkgs.jq
         pkgs.openssl
+        pkgs.systemd
         pkgs.util-linux
       ];
       script = "${initScript}";
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+      };
+    };
+
+    systemd.services.pd-pki-root-certificate-authority-refresh = lib.mkIf (refreshSourcePaths != [ ] && cfg.refreshInterval != null) {
+      description = "Refresh runtime root CA artifacts for pd-pki";
+      after = [ "pd-pki-root-certificate-authority-init.service" ];
+      requires = [ "pd-pki-root-certificate-authority-init.service" ];
+      path = [
+        pkgs.coreutils
+        pkgs.jq
+        pkgs.openssl
+        pkgs.systemd
+        pkgs.util-linux
+      ];
+      script = "${initScript}";
+      serviceConfig = {
+        Type = "oneshot";
+      };
+    };
+
+    systemd.timers.pd-pki-root-certificate-authority-refresh = lib.mkIf (refreshSourcePaths != [ ] && cfg.refreshInterval != null) {
+      description = "Periodically reconcile imported root CA artifacts for pd-pki";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = cfg.refreshInterval;
+        OnUnitInactiveSec = cfg.refreshInterval;
+        Persistent = true;
+        Unit = "pd-pki-root-certificate-authority-refresh.service";
       };
     };
   };

@@ -46,9 +46,16 @@ let
       };
     };
 
-    options.systemd.services = lib.mkOption {
-      type = lib.types.attrsOf lib.types.anything;
-      default = { };
+    options.systemd = {
+      services = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+      };
+
+      timers = lib.mkOption {
+        type = lib.types.attrsOf lib.types.anything;
+        default = { };
+      };
     };
   };
 

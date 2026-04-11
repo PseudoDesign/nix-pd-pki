@@ -10,8 +10,8 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - 19 workflow steps are modeled and exported as buildable flake packages
 - 31 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
-- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, and do not bootstrap a CA hierarchy on deployment nodes
-- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy, persists signer-side issuance state with automatic serial allocation under a lock, and can generate CRLs from recorded revocations
+- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, reconcile imported artifacts on a timer, and do not bootstrap a CA hierarchy on deployment nodes
+- `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy down to the CSR key algorithm and RSA bit length, persists signer-side issuance state with automatic serial allocation under a lock, records approval and revocation attribution, and can generate CRLs from recorded revocations
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## What This Repository Is Today
@@ -35,7 +35,7 @@ When a role module is enabled, deployment nodes keep mutable runtime artifacts u
 
 This repo is still test-oriented rather than production-ready PKI automation:
 
-- private keys used for runtime services are generated in software under `/var/lib/pd-pki`; they are not hardware-backed or escrowed
+- private keys used for runtime services are still generated in software under `/var/lib/pd-pki` by default unless you provide `keySourcePath`; the repo does not yet ship a concrete HSM, TPM, or Vault integration
 - root and intermediate hardware-backed flows are simulated, not integrated with YubiKey or HSM hardware
 - signer-side and runtime CRL flows are implemented, but there is still no OCSP responder or distribution service
 - issuance inputs are fixed representative values baked into the derivations today
@@ -112,9 +112,8 @@ The flake exports the following top-level outputs:
   - `openvpn-server-leaf`
   - `openvpn-client-leaf`
 - `apps.test-report`
-- `define`
-  - the machine-readable role and step contract from [`packages/definitions.nix`](/home/adam/pd-pki/packages/definitions.nix)
 - `lib`
+  - `definitions`
   - `roles`
   - `roleCount`
   - `stepCount`
@@ -170,7 +169,7 @@ Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
 - server and client extended key usage validation
 - SAN presence checks
 - NixOS module evaluation
-- Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, validate and stage imported certificates and metadata atomically without bootstrapping a CA chain, reject bad imports without clobbering the last good runtime state, generate and stage CRLs, and enforce revocation with `openssl verify -crl_check`
+- Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, validate and stage imported certificates and metadata atomically without bootstrapping a CA chain, reconcile staged imports automatically on a timer, trigger configured consumer reload hooks only when runtime artifacts actually change, reject bad imports without clobbering the last good runtime state, generate and stage CRLs, and enforce revocation with `openssl verify -crl_check`
 
 The Linux-only [`role-topology` check](/home/adam/pd-pki/checks/nixos-role-topology.nix) adds a multi-node NixOS test on top of the direct derivation-based role and step checks exported on every supported system.
 
@@ -185,11 +184,13 @@ Each role has a NixOS module built from [`modules/mk-role-module.nix`](/home/ada
 Each role module now has a single runtime behavior:
 
 - `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root key, CSR, certificate, optional CRL, and optional metadata into mutable runtime paths.
-- `services.pd-pki.roles.intermediateSigningAuthority` generates a local CA key and CSR, writes `signing-request.json`, then stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
-- `services.pd-pki.roles.openvpnServerLeaf` generates a local key and CSR, writes `issuance-request.json` plus `san-manifest.json`, then stages an imported server certificate, chain, issuer CRL, and optional metadata.
-- `services.pd-pki.roles.openvpnClientLeaf` generates a local key and CSR, writes `issuance-request.json` plus `identity-manifest.json`, then stages an imported client certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.intermediateSigningAuthority` writes `signing-request.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local CA key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus `san-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported server certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnClientLeaf` writes `issuance-request.json` plus `identity-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported client certificate, chain, issuer CRL, and optional metadata.
 
 Imported runtime artifacts are validated before they replace the live files. The modules reject certificate/key or certificate/CSR mismatches, broken chains, wrong EKUs or SANs for leaf roles, CA/profile mismatches for intermediate roles, invalid CRLs, expired CRLs, and metadata that does not match the staged certificate. Updated imports are written through a staging directory first so failed validation leaves the existing runtime state untouched.
+
+If a role has source paths configured, it also enables a periodic refresh timer. The timer re-runs validation and staging automatically, and roles can optionally reload or restart dependent systemd units through `reloadUnits` and `reloadMode` when the staged runtime artifacts actually change.
 
 Available option paths are:
 
@@ -206,6 +207,10 @@ Example:
 
   services.pd-pki.roles.openvpnServerLeaf = {
     enable = true;
+    allowLocalKeyGeneration = false;
+    refreshInterval = "5m";
+    reloadUnits = [ "openvpn-server.service" ];
+    keySourcePath = "/run/secrets/openvpn/server.key.pem";
     certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/server.chain.pem";
     crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
@@ -241,17 +246,18 @@ pd-pki-signing-tools export-request \
   --out-dir /tmp/server-request
 ```
 
-2. On the signer, sign the bundle with the issuing CA key and certificate plus an explicit signer policy:
+2. On the signer, sign the bundle with the issuing CA key and certificate plus an explicit signer policy and approval attribution:
 
 ```bash
-pd-pki-signing-tools sign-request \
+  pd-pki-signing-tools sign-request \
   --request-dir /tmp/server-request \
   --out-dir /tmp/server-signed \
   --issuer-key /secure/issuer/intermediate-ca.key.pem \
   --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
   --issuer-chain /secure/issuer/chain.pem \
   --signer-state-dir /secure/issuer/state/intermediate \
-  --policy-file /secure/issuer/policy/intermediate.json
+  --policy-file /secure/issuer/policy/intermediate.json \
+  --approved-by operator-vpn
 ```
 
 3. Back on the request node, import the signed bundle into runtime state:
@@ -267,6 +273,8 @@ When `sign-request` runs with `--signer-state-dir`, it now requires `--policy-fi
 
 ```text
 <signer-state-dir>/
+├── audit/
+│   └── <timestamp>-<event>-<serial-or-request>.json
 ├── crls/
 │   ├── current.pem
 │   ├── metadata.json
@@ -299,7 +307,12 @@ A minimal signer policy looks like this:
     "openvpn-server-leaf": {
       "defaultDays": 825,
       "maxDays": 825,
+      "allowedKeyAlgorithms": ["RSA"],
+      "minimumRsaBits": 3072,
       "allowedProfiles": ["serverAuth"],
+      "crlDistributionPoints": [
+        "https://pki.example.test/intermediate.crl"
+      ],
       "commonNamePatterns": ["^[A-Za-z0-9.-]+$"],
       "subjectAltNamePatterns": [
         "^DNS:[A-Za-z0-9.-]+$",
@@ -309,7 +322,12 @@ A minimal signer policy looks like this:
     "openvpn-client-leaf": {
       "defaultDays": 825,
       "maxDays": 825,
+      "allowedKeyAlgorithms": ["RSA"],
+      "minimumRsaBits": 3072,
       "allowedProfiles": ["clientAuth"],
+      "crlDistributionPoints": [
+        "https://pki.example.test/intermediate.crl"
+      ],
       "commonNamePatterns": ["^[A-Za-z0-9.-]+$"],
       "subjectAltNamePatterns": ["^DNS:[A-Za-z0-9.-]+$"]
     }
@@ -317,7 +335,7 @@ A minimal signer policy looks like this:
 }
 ```
 
-For intermediate CA requests, the same policy format can constrain `defaultDays`, `maxDays`, `commonNamePatterns`, and `allowedPathLens`.
+For intermediate CA requests, the same policy format can constrain `defaultDays`, `maxDays`, `commonNamePatterns`, `allowedPathLens`, `allowedKeyAlgorithms`, `minimumRsaBits`, and `crlDistributionPoints`.
 
 To revoke an issued serial in signer state:
 
@@ -325,10 +343,11 @@ To revoke an issued serial in signer state:
 pd-pki-signing-tools revoke-issued \
   --signer-state-dir /secure/issuer/state/intermediate \
   --serial 2 \
-  --reason keyCompromise
+  --reason keyCompromise \
+  --revoked-by operator-security
 ```
 
-That updates the issuance, request, and serial records to `status = "revoked"` and writes a matching revocation record under `revocations/`.
+That updates the issuance, request, and serial records to `status = "revoked"`, records the revocation actor and optional ticket metadata, and writes a matching revocation record under `revocations/`.
 
 To generate a CRL from the recorded signer state:
 
@@ -373,7 +392,7 @@ nix build .#openvpn-server-leaf-package-openvpn-server-deployment-bundle
 Inspect the machine-readable contract:
 
 ```bash
-nix eval --json .#define | jq .
+nix eval --json .#lib.definitions | jq .
 nix eval --json .#lib.checkNames | jq .
 ```
 
@@ -416,7 +435,8 @@ Key files:
 
 - [`flake.nix`](/home/adam/pd-pki/flake.nix) wires together packages, checks, modules, app outputs, and helper lib values
 - [`packages/definitions.nix`](/home/adam/pd-pki/packages/definitions.nix) is the source of truth for role and step contracts
-- [`packages/pki-workflow-lib.sh`](/home/adam/pd-pki/packages/pki-workflow-lib.sh) contains the OpenSSL helper functions used by the role packages
+- [`packages/pki-workflow-lib.sh`](/home/adam/pd-pki/packages/pki-workflow-lib.sh) contains the OpenSSL helper functions used by the role packages and runtime module validation scripts
+- [`packages/pd-pki-signing-tools.nix`](/home/adam/pd-pki/packages/pd-pki-signing-tools.nix) defines the external signer, signer-state, and CRL tooling
 - [`apps/default.nix`](/home/adam/pd-pki/apps/default.nix) defines the `test-report` app
 
 ## Verified Commands
@@ -427,5 +447,5 @@ These commands resolve successfully in the repo as of the current state of this 
 - `nix build --no-link .#root-certificate-authority-create-root-ca`
 - `nix build --no-link .#openvpn-server-leaf-package-openvpn-server-deployment-bundle`
 - `nix build --no-link .#checks.x86_64-linux.role-topology .#checks.x86_64-linux.pd-pki .#checks.x86_64-linux.nixos-module-default`
-- `nix eval --json .#define | jq '.roleCount, .stepCount'`
+- `nix eval --json .#lib.definitions | jq '.roleCount, .stepCount'`
 - `nix run .#test-report -- --help`

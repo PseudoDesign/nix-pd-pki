@@ -125,12 +125,5 @@ let
         ${validationCommands}
       '';
   };
-
-  checkNames =
-    map (role: role.id) definitions.roles
-    ++ builtins.concatLists (map (role: map (step: "${role.id}-${step.id}") role.steps) definitions.roles);
 in
-listToAttrs (map (name: {
-  inherit name;
-  value = topologyTest;
-}) checkNames)
+topologyTest

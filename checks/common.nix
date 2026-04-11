@@ -22,30 +22,6 @@ rec {
       printf '%s\n' "[${step.id}] JSON artifact ok: ${file}"
     '') (filter (file: hasSuffix ".json" file) step.requiredFiles);
 
-  bundleCheckCommands = step: stepPathRef:
-    let
-      artifacts = step.implementation.artifacts;
-      bundlePath = pathOrEmpty artifacts "bundle";
-      manifestPath =
-        if builtins.hasAttr "manifest" artifacts then artifacts.manifest
-        else if builtins.hasAttr "metadata" artifacts then artifacts.metadata
-        else "";
-    in
-    ''
-      ${if bundlePath != "" then ''
-        printf '%s\n' "[${step.id}] checking bundle directory: ${bundlePath}"
-        # Verify the bundle directory expected by this step exists.
-        test -d "${stepPathRef}/${bundlePath}"
-        printf '%s\n' "[${step.id}] bundle directory ok: ${bundlePath}"
-      '' else ""}
-      ${if manifestPath != "" then ''
-        printf '%s\n' "[${step.id}] parsing bundle metadata: ${manifestPath}"
-        # Verify the bundle metadata can be parsed as JSON.
-        jq empty "${stepPathRef}/${manifestPath}"
-        printf '%s\n' "[${step.id}] bundle metadata ok: ${manifestPath}"
-      '' else ""}
-    '';
-
   validationCommand =
     {
       role,
@@ -58,8 +34,6 @@ rec {
       certificatePath = pathOrEmpty artifacts "certificate";
       csrPath = pathOrEmpty artifacts "csr";
       chainPath = pathOrEmpty artifacts "chain";
-      recordPath = pathOrEmpty artifacts "record";
-      statusPath = pathOrEmpty artifacts "status";
     in
     if validation == "x509-parse" then ''
       printf '%s\n' "[${role.id}/${step.id}] validating X.509 parsing"
@@ -107,16 +81,6 @@ rec {
         openssl req -in "${stepPathRef}/${csrPath}" -noout -text | grep -q "Subject Alternative Name"
       fi
       printf '%s\n' "[${role.id}/${step.id}] subject alternative names passed"
-    '' else if validation == "bundle-complete" then
-      bundleCheckCommands step stepPathRef
-    else if validation == "trust-bundle" then
-      bundleCheckCommands step stepPathRef
-    else if validation == "revocation-json" then ''
-      printf '%s\n' "[${role.id}/${step.id}] validating revocation metadata"
-      # Confirm the revocation metadata files are well-formed JSON.
-      ${if recordPath != "" then ''jq empty "${stepPathRef}/${recordPath}"'' else ""}
-      ${if statusPath != "" then ''jq empty "${stepPathRef}/${statusPath}"'' else ""}
-      printf '%s\n' "[${role.id}/${step.id}] revocation metadata passed"
     '' else if validation == "json-parse" then
       checkJsonFiles step stepPathRef
     else

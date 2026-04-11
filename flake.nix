@@ -12,8 +12,8 @@
         ++ map (role: "nixos-module-${role.id}") definitions.roles;
       checkNames =
         [
-          "define-contract"
           "module-runtime-artifacts"
+          "role-topology"
           "pd-pki"
         ]
         ++ map (role: role.id) definitions.roles

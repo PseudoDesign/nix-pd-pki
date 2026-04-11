@@ -171,10 +171,7 @@ let
             "artifacts/revocation-status.json"
             "status.json"
           ];
-          validations = [
-            "revocation-json"
-            "json-parse"
-          ];
+          validations = [ "json-parse" ];
           implementation = {
             kind = "revocation-record";
             note = "Stores revocation data as JSON for testability rather than producing a CRL.";
@@ -208,10 +205,7 @@ let
             "artifacts/publication-manifest.json"
             "status.json"
           ];
-          validations = [
-            "trust-bundle"
-            "json-parse"
-          ];
+          validations = [ "json-parse" ];
           implementation = {
             kind = "trust-publication";
             note = "Publishes public trust material and metadata into a deterministic bundle layout.";
@@ -413,10 +407,7 @@ let
             "artifacts/revoked-certificates.json"
             "status.json"
           ];
-          validations = [
-            "revocation-json"
-            "json-parse"
-          ];
+          validations = [ "json-parse" ];
           implementation = {
             kind = "revocation-record";
             note = "Stores representative leaf revocation data as JSON.";
@@ -451,10 +442,7 @@ let
             "artifacts/publication-manifest.json"
             "status.json"
           ];
-          validations = [
-            "trust-bundle"
-            "json-parse"
-          ];
+          validations = [ "json-parse" ];
           implementation = {
             kind = "trust-publication";
             note = "Publishes the intermediate certificate, chain, representative issued certs, and revocation metadata.";
@@ -532,7 +520,6 @@ let
             "status.json"
           ];
           validations = [
-            "bundle-complete"
             "server-eku"
             "chain-verify"
             "json-parse"
@@ -612,10 +599,7 @@ let
             "artifacts/trust-update-status.json"
             "status.json"
           ];
-          validations = [
-            "trust-bundle"
-            "json-parse"
-          ];
+          validations = [ "json-parse" ];
           implementation = {
             kind = "trust-consumption";
             note = "Stages the published trust bundle into a server-oriented layout and records activation metadata.";
@@ -692,7 +676,6 @@ let
             "status.json"
           ];
           validations = [
-            "bundle-complete"
             "client-eku"
             "chain-verify"
             "json-parse"
@@ -772,10 +755,7 @@ let
             "artifacts/trust-update-status.json"
             "status.json"
           ];
-          validations = [
-            "trust-bundle"
-            "json-parse"
-          ];
+          validations = [ "json-parse" ];
           implementation = {
             kind = "trust-consumption";
             note = "Stages the published trust bundle into a client-oriented layout and records activation metadata.";

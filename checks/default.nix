@@ -7,33 +7,27 @@
 let
   inherit (pkgs.lib) listToAttrs;
 
+  rootChecks = import ./root-certificate-authority.nix {
+    inherit pkgs definitions packages;
+  };
+
+  intermediateChecks = import ./intermediate-signing-authority.nix {
+    inherit pkgs definitions packages;
+  };
+
+  serverChecks = import ./openvpn-server-leaf.nix {
+    inherit pkgs definitions packages;
+  };
+
+  clientChecks = import ./openvpn-client-leaf.nix {
+    inherit pkgs definitions packages;
+  };
+
   roleChecks =
-    if pkgs.stdenv.hostPlatform.isLinux then
-      import ./nixos-role-topology.nix {
-        inherit pkgs definitions packages nixosModules;
-      }
-    else
-      let
-        rootChecks = import ./root-certificate-authority.nix {
-          inherit pkgs definitions packages;
-        };
-
-        intermediateChecks = import ./intermediate-signing-authority.nix {
-          inherit pkgs definitions packages;
-        };
-
-        serverChecks = import ./openvpn-server-leaf.nix {
-          inherit pkgs definitions packages;
-        };
-
-        clientChecks = import ./openvpn-client-leaf.nix {
-          inherit pkgs definitions packages;
-        };
-      in
-      rootChecks
-      // intermediateChecks
-      // serverChecks
-      // clientChecks;
+    rootChecks
+    // intermediateChecks
+    // serverChecks
+    // clientChecks;
 
   moduleChecks = import ./nixos-modules.nix {
     inherit pkgs definitions packages nixosModules;
@@ -41,24 +35,23 @@ let
 
   sharedChecks = listToAttrs [
     {
-      name = "define-contract";
-      value = pkgs.runCommand "define-contract-check" {
-        nativeBuildInputs = [ pkgs.jq ];
-      } ''
-        set -euo pipefail
-
-        printf '%s\n' "[define-contract] starting check"
-        # Confirm the top-level definition contract serializes to valid JSON.
-        jq empty ${pkgs.writeText "pd-pki-define.json" (builtins.toJSON definitions)}
-        printf '%s\n' "[define-contract] check passed"
-        touch "$out"
-      '';
-    }
-    {
       name = "module-runtime-artifacts";
       value = import ./module-runtime-artifacts.nix {
         inherit pkgs packages nixosModules;
       };
+    }
+    {
+      name = "role-topology";
+      value =
+        if pkgs.stdenv.hostPlatform.isLinux then
+          import ./nixos-role-topology.nix {
+            inherit pkgs definitions packages nixosModules;
+          }
+        else
+          pkgs.runCommand "pd-pki-role-topology-unsupported" { } ''
+            printf '%s\n' "[role-topology] skipped: requires Linux NixOS test support"
+            touch "$out"
+          '';
     }
     {
       name = "pd-pki";

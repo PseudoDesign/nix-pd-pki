@@ -98,11 +98,11 @@ The flake exports the following top-level outputs:
   - one package per role
   - one package per workflow step, named `<role-id>-<step-id>`
 - `checks`
-  - `define-contract` check
   - aggregate package check
   - role and step checks
   - NixOS module checks
-  - Linux-only runtime-module and role-topology tests
+  - `module-runtime-artifacts` check
+  - `role-topology` check
 - `nixosModules`
   - `default`
   - `root-certificate-authority`
@@ -151,14 +151,13 @@ Representative artifact types currently include:
 - CSRs
 - certificate chains
 - deployment and credential bundles
-- trust-bundle directories
+- trust bundle directories
 - JSON manifests, issuance metadata, revocation records, and publication metadata
 
 ## Validation
 
 Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
 
-- flake definition serialization
 - aggregate package wiring
 - role and step artifact presence
 - JSON parsing for declared metadata files
@@ -170,7 +169,7 @@ Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
 - NixOS module evaluation
 - Linux-only verification that runtime modules generate only their local mutable artifacts and stage imported certificates without bootstrapping a CA chain
 
-On Linux, role and step checks are exercised through a multi-node NixOS topology test. On non-Linux systems, role and step checks fall back to direct derivation-based validation.
+The Linux-only [`role-topology` check](/home/adam/pd-pki/checks/nixos-role-topology.nix) adds a multi-node NixOS test on top of the direct derivation-based role and step checks exported on every supported system.
 
 ## NixOS Modules
 
@@ -294,6 +293,6 @@ These commands resolve successfully in the repo as of the current state of this 
 - `nix build --no-link --print-out-paths .#root-certificate-authority`
 - `nix build --no-link .#root-certificate-authority-create-root-ca`
 - `nix build --no-link .#openvpn-server-leaf-package-openvpn-server-deployment-bundle`
-- `nix build --no-link .#checks.x86_64-linux.define-contract .#checks.x86_64-linux.pd-pki .#checks.x86_64-linux.nixos-module-default`
+- `nix build --no-link .#checks.x86_64-linux.role-topology .#checks.x86_64-linux.pd-pki .#checks.x86_64-linux.nixos-module-default`
 - `nix eval --json .#define | jq '.roleCount, .stepCount'`
 - `nix run .#test-report -- --help`

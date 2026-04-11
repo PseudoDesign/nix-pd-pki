@@ -12,8 +12,11 @@ let
     directory = cfg.stateDir;
     key = "${cfg.stateDir}/client.key.pem";
     csr = "${cfg.stateDir}/client.csr.pem";
+    request = "${cfg.stateDir}/issuance-request.json";
+    identityManifest = "${cfg.stateDir}/identity-manifest.json";
     certificate = "${cfg.stateDir}/client.cert.pem";
     chain = "${cfg.stateDir}/chain.pem";
+    metadata = "${cfg.stateDir}/certificate-metadata.json";
   };
   initScript = pkgs.writeShellScript "pd-pki-openvpn-client-leaf-init" ''
     set -euo pipefail
@@ -25,10 +28,14 @@ let
     lock_file=${lib.escapeShellArg "${runtimeDefaults.baseStateDir}/.runtime-init.lock"}
     key_path=${lib.escapeShellArg runtimePaths.key}
     csr_path=${lib.escapeShellArg runtimePaths.csr}
+    request_path=${lib.escapeShellArg runtimePaths.request}
+    identity_manifest_path=${lib.escapeShellArg runtimePaths.identityManifest}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
     chain_path=${lib.escapeShellArg runtimePaths.chain}
+    metadata_path=${lib.escapeShellArg runtimePaths.metadata}
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
     chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
+    metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
 
     request_workdir=""
     trap 'rm -rf "$request_workdir"' EXIT
@@ -59,8 +66,47 @@ let
       exit 1
     fi
 
+    jq -n \
+      --arg identity ${lib.escapeShellArg cfg.commonName} \
+      --argjson subjectAltNames ${lib.escapeShellArg (builtins.toJSON cfg.subjectAltNames)} \
+      '{
+        identity: $identity,
+        subjectAltNames: $subjectAltNames
+      }' > "$identity_manifest_path"
+    chmod 644 "$identity_manifest_path"
+
+    jq -n \
+      --arg schemaVersion "1" \
+      --arg roleId "openvpn-client-leaf" \
+      --arg requestKind "tls-leaf" \
+      --arg basename ${lib.escapeShellArg runtimeDefaults.client.basename} \
+      --arg commonName ${lib.escapeShellArg cfg.commonName} \
+      --argjson subjectAltNames ${lib.escapeShellArg (builtins.toJSON cfg.subjectAltNames)} \
+      --arg requestedProfile ${lib.escapeShellArg runtimeDefaults.client.profile} \
+      --arg requestedDays ${lib.escapeShellArg runtimeDefaults.client.days} \
+      --arg csrFile "$(basename "$csr_path")" \
+      '{
+        schemaVersion: ($schemaVersion | tonumber),
+        roleId: $roleId,
+        requestKind: $requestKind,
+        basename: $basename,
+        commonName: $commonName,
+        subjectAltNames: $subjectAltNames,
+        requestedProfile: $requestedProfile,
+        requestedDays: ($requestedDays | tonumber),
+        csrFile: $csrFile
+      }' > "$request_path"
+    chmod 644 "$request_path"
+
     copy_optional_artifact "$certificate_source_path" "$cert_path" 644
     copy_optional_artifact "$chain_source_path" "$chain_path" 644
+
+    if [ -n "$metadata_source_path" ]; then
+      copy_optional_artifact "$metadata_source_path" "$metadata_path" 644
+    elif [ -f "$cert_path" ]; then
+      write_certificate_metadata "$cert_path" "$metadata_path" "openvpn-client-imported"
+      chmod 644 "$metadata_path"
+    fi
   '';
 in
 {
@@ -113,6 +159,15 @@ in
       default = null;
       description = ''
         Optional host path to a client certificate chain to stage into the runtime state directory.
+      '';
+    };
+
+    metadataSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to imported client certificate metadata JSON to stage into the runtime
+        state directory.
       '';
     };
 

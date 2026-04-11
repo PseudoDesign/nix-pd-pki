@@ -105,6 +105,18 @@ write_certificate_metadata() {
     }' > "$target"
 }
 
+write_certificate_chain() {
+  local target="$1"
+  local issuer_cert="$2"
+  local issuer_chain="${3:-}"
+
+  if [ -n "$issuer_chain" ]; then
+    cat "$issuer_cert" "$issuer_chain" > "$target"
+  else
+    cp "$issuer_cert" "$target"
+  fi
+}
+
 generate_self_signed_ca() {
   local artifacts_dir="$1"
   local basename="$2"
@@ -271,4 +283,75 @@ EOF
     -extensions tls_leaf \
     -out "$cert_path"
   cat "$issuer_cert" "$root_cert" > "$chain_path"
+}
+
+sign_ca_request() {
+  local artifacts_dir="$1"
+  local basename="$2"
+  local csr_path="$3"
+  local pathlen="$4"
+  local serial="$5"
+  local days="$6"
+  local issuer_key="$7"
+  local issuer_cert="$8"
+  local issuer_chain="${9:-}"
+
+  local cert_path="${artifacts_dir}/${basename}.cert.pem"
+  local chain_path="${artifacts_dir}/chain.pem"
+  local ext_path="${artifacts_dir}/${basename}.ext"
+
+  mkdir -p "$artifacts_dir"
+  cat > "$ext_path" <<EOF
+[ v3_intermediate_ca ]
+basicConstraints = critical, CA:true, pathlen:${pathlen}
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+EOF
+
+  openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
+    -in "$csr_path" \
+    -CA "$issuer_cert" \
+    -CAkey "$issuer_key" \
+    -extfile "$ext_path" \
+    -extensions v3_intermediate_ca \
+    -out "$cert_path"
+  write_certificate_chain "$chain_path" "$issuer_cert" "$issuer_chain"
+}
+
+sign_tls_request() {
+  local artifacts_dir="$1"
+  local basename="$2"
+  local csr_path="$3"
+  local san_spec="$4"
+  local profile="$5"
+  local serial="$6"
+  local days="$7"
+  local issuer_key="$8"
+  local issuer_cert="$9"
+  local issuer_chain="${10:-}"
+
+  local cert_path="${artifacts_dir}/${basename}.cert.pem"
+  local chain_path="${artifacts_dir}/chain.pem"
+  local ext_path="${artifacts_dir}/${basename}.ext"
+
+  mkdir -p "$artifacts_dir"
+  cat > "$ext_path" <<EOF
+[ tls_leaf ]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = ${profile}
+subjectAltName = ${san_spec}
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+EOF
+
+  openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
+    -in "$csr_path" \
+    -CA "$issuer_cert" \
+    -CAkey "$issuer_key" \
+    -extfile "$ext_path" \
+    -extensions tls_leaf \
+    -out "$cert_path"
+  write_certificate_chain "$chain_path" "$issuer_cert" "$issuer_chain"
 }

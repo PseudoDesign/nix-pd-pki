@@ -23,6 +23,10 @@ let
     inherit pkgs definitions rootCertificateAuthority intermediateSigningAuthority;
   };
 
+  pdPkiSigningTools = import ./pd-pki-signing-tools.nix {
+    inherit pkgs;
+  };
+
   rolePackages = {
     pd-pki = pkgs.linkFarm "pd-pki" [
       {
@@ -47,6 +51,7 @@ let
     intermediate-signing-authority = intermediateSigningAuthority;
     openvpn-server-leaf = openvpnServerLeaf;
     openvpn-client-leaf = openvpnClientLeaf;
+    pd-pki-signing-tools = pdPkiSigningTools;
   };
 
   stepPackages =

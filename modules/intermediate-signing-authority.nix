@@ -11,6 +11,7 @@ let
     directory = cfg.stateDir;
     key = "${cfg.stateDir}/intermediate-ca.key.pem";
     csr = "${cfg.stateDir}/intermediate-ca.csr.pem";
+    request = "${cfg.stateDir}/signing-request.json";
     certificate = "${cfg.stateDir}/intermediate-ca.cert.pem";
     chain = "${cfg.stateDir}/chain.pem";
     metadata = "${cfg.stateDir}/signer-metadata.json";
@@ -25,6 +26,7 @@ let
     lock_file=${lib.escapeShellArg "${runtimeDefaults.baseStateDir}/.runtime-init.lock"}
     key_path=${lib.escapeShellArg runtimePaths.key}
     csr_path=${lib.escapeShellArg runtimePaths.csr}
+    request_path=${lib.escapeShellArg runtimePaths.request}
     cert_path=${lib.escapeShellArg runtimePaths.certificate}
     chain_path=${lib.escapeShellArg runtimePaths.chain}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
@@ -49,8 +51,8 @@ let
       generate_ca_request \
         "$intermediate_workdir" \
         ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.commonName} \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.pathLen}
+        ${lib.escapeShellArg cfg.commonName} \
+        ${lib.escapeShellArg cfg.pathLen}
       cp "$intermediate_workdir/intermediate-ca.key.pem" "$key_path"
       cp "$intermediate_workdir/intermediate-ca.csr.pem" "$csr_path"
       chmod 600 "$key_path"
@@ -59,6 +61,27 @@ let
       printf '%s\n' "Refusing to regenerate an intermediate request from partial state in $state_dir" >&2
       exit 1
     fi
+
+    jq -n \
+      --arg schemaVersion "1" \
+      --arg roleId "intermediate-signing-authority" \
+      --arg requestKind "intermediate-ca" \
+      --arg basename ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
+      --arg commonName ${lib.escapeShellArg cfg.commonName} \
+      --arg pathLen ${lib.escapeShellArg cfg.pathLen} \
+      --arg requestedDays ${lib.escapeShellArg runtimeDefaults.intermediate.days} \
+      --arg csrFile "$(basename "$csr_path")" \
+      '{
+        schemaVersion: ($schemaVersion | tonumber),
+        roleId: $roleId,
+        requestKind: $requestKind,
+        basename: $basename,
+        commonName: $commonName,
+        pathLen: ($pathLen | tonumber),
+        requestedDays: ($requestedDays | tonumber),
+        csrFile: $csrFile
+      }' > "$request_path"
+    chmod 644 "$request_path"
 
     copy_optional_artifact "$certificate_source_path" "$cert_path" 644
     copy_optional_artifact "$chain_source_path" "$chain_path" 644
@@ -80,6 +103,22 @@ in
       default = runtimeDefaults.intermediate.stateDir;
       description = ''
         Mutable directory where the runtime intermediate CA keypair and metadata live.
+      '';
+    };
+
+    commonName = lib.mkOption {
+      type = lib.types.str;
+      default = runtimeDefaults.intermediate.commonName;
+      description = ''
+        Common name to embed in the runtime intermediate CA certificate signing request.
+      '';
+    };
+
+    pathLen = lib.mkOption {
+      type = lib.types.str;
+      default = runtimeDefaults.intermediate.pathLen;
+      description = ''
+        Path length constraint requested for the runtime intermediate CA certificate.
       '';
     };
 

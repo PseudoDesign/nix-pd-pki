@@ -13,6 +13,7 @@
       checkNames =
         [
           "module-runtime-artifacts"
+          "openvpn-daemon"
           "role-topology"
           "pd-pki"
         ]

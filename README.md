@@ -8,7 +8,7 @@ Nix-based PKI workflow toolkit for Pseudo Design.
 
 - 4 roles are implemented: root CA, intermediate signing authority, OpenVPN server leaf, and OpenVPN client leaf
 - 19 workflow steps are modeled and exported as buildable flake packages
-- 31 named checks are exported from the flake
+- 32 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
 - NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, reconcile imported artifacts on a timer, and do not bootstrap a CA hierarchy on deployment nodes
 - `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy down to the CSR key algorithm and RSA bit length, persists signer-side issuance state with automatic serial allocation under a lock, records approval and revocation attribution, and can generate CRLs from recorded revocations
@@ -104,6 +104,7 @@ The flake exports the following top-level outputs:
   - role and step checks
   - NixOS module checks
   - `module-runtime-artifacts` check
+  - `openvpn-daemon` check
   - `role-topology` check
 - `nixosModules`
   - `default`
@@ -170,8 +171,9 @@ Checks in [`checks/`](/home/adam/pd-pki/checks) cover:
 - SAN presence checks
 - NixOS module evaluation
 - Linux-only verification that runtime modules generate only their local mutable artifacts, export signer request bundles, complete a root-to-intermediate-to-leaf signing roundtrip, validate and stage imported certificates and metadata atomically without bootstrapping a CA chain, reconcile staged imports automatically on a timer, trigger configured consumer reload hooks only when runtime artifacts actually change, reject bad imports without clobbering the last good runtime state, generate and stage CRLs, and enforce revocation with `openssl verify -crl_check`
+- Linux-only OpenVPN daemon verification that boots real `openvpn-server` and `openvpn-client` services, confirms mTLS tunnel establishment with staged runtime artifacts, verifies tunnel connectivity in both directions, and proves a revoked client certificate is rejected after CRL refresh
 
-The Linux-only [`role-topology` check](/home/adam/pd-pki/checks/nixos-role-topology.nix) adds a multi-node NixOS test on top of the direct derivation-based role and step checks exported on every supported system.
+The Linux-only [`role-topology` check](/home/adam/pd-pki/checks/nixos-role-topology.nix) adds a multi-node NixOS test on top of the direct derivation-based role and step checks exported on every supported system. The Linux-only [`openvpn-daemon` check](/home/adam/pd-pki/checks/openvpn-daemon.nix) exercises the OpenVPN server and client daemons directly against staged signer outputs and CRL updates.
 
 ## NixOS Modules
 
@@ -446,6 +448,6 @@ These commands resolve successfully in the repository:
 - `nix build --no-link --print-out-paths .#root-certificate-authority`
 - `nix build --no-link .#root-certificate-authority-create-root-ca`
 - `nix build --no-link .#openvpn-server-leaf-package-openvpn-server-deployment-bundle`
-- `nix build --no-link .#checks.x86_64-linux.role-topology .#checks.x86_64-linux.pd-pki .#checks.x86_64-linux.nixos-module-default`
+- `nix build --no-link .#checks.x86_64-linux.role-topology .#checks.x86_64-linux.openvpn-daemon .#checks.x86_64-linux.pd-pki .#checks.x86_64-linux.nixos-module-default`
 - `nix eval --json .#lib.definitions | jq '.roleCount, .stepCount'`
 - `nix run .#test-report -- --help`

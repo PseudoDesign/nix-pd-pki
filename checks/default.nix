@@ -41,6 +41,12 @@ let
       };
     }
     {
+      name = "openvpn-daemon";
+      value = import ./openvpn-daemon.nix {
+        inherit pkgs packages nixosModules;
+      };
+    }
+    {
       name = "role-topology";
       value =
         if pkgs.stdenv.hostPlatform.isLinux then

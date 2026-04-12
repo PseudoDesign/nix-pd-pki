@@ -11,6 +11,11 @@ let
       description = "Boot each role module and confirm it only creates local mutable artifacts while staging any imported certificates and chains.";
     }
     {
+      name = "openvpn-daemon";
+      title = "Validate OpenVPN Daemon Behavior";
+      description = "Boot real OpenVPN server and client daemons, drive the external signer/import flow, verify tunnel establishment, and confirm revoked client certificates are rejected.";
+    }
+    {
       name = "role-topology";
       title = "Validate Linux Role Topology";
       description = "Boot one Linux VM per role and run the exported role and step checks through the installed NixOS modules.";

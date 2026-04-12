@@ -8,13 +8,61 @@ let
   };
   cfg = config.services.pd-pki.roles.openvpnServerLeaf;
   sanSpec = builtins.concatStringsSep "," cfg.subjectAltNames;
-  refreshSourcePaths = builtins.filter (path: path != null) [
+  refreshInputs = builtins.filter (value: value != null) [
     cfg.keySourcePath
+    cfg.keyCredentialPath
     cfg.csrSourcePath
+    cfg.csrCredentialPath
     cfg.certificateSourcePath
+    cfg.certificateCredentialPath
     cfg.chainSourcePath
+    cfg.chainCredentialPath
     cfg.crlSourcePath
+    cfg.crlCredentialPath
     cfg.metadataSourcePath
+    cfg.metadataCredentialPath
+  ];
+  credentialNames = {
+    key = "server-key-source";
+    csr = "server-csr-source";
+    certificate = "server-certificate-source";
+    chain = "server-chain-source";
+    crl = "server-crl-source";
+    metadata = "server-metadata-source";
+  };
+  loadCredentials = builtins.filter (entry: entry != null) [
+    (if cfg.keyCredentialPath == null then null else "${credentialNames.key}:${cfg.keyCredentialPath}")
+    (if cfg.csrCredentialPath == null then null else "${credentialNames.csr}:${cfg.csrCredentialPath}")
+    (if cfg.certificateCredentialPath == null then null else "${credentialNames.certificate}:${cfg.certificateCredentialPath}")
+    (if cfg.chainCredentialPath == null then null else "${credentialNames.chain}:${cfg.chainCredentialPath}")
+    (if cfg.crlCredentialPath == null then null else "${credentialNames.crl}:${cfg.crlCredentialPath}")
+    (if cfg.metadataCredentialPath == null then null else "${credentialNames.metadata}:${cfg.metadataCredentialPath}")
+  ];
+  sourceConflictAssertions = [
+    {
+      assertion = !(cfg.keySourcePath != null && cfg.keyCredentialPath != null);
+      message = "openvpnServerLeaf.keySourcePath and openvpnServerLeaf.keyCredentialPath are mutually exclusive";
+    }
+    {
+      assertion = !(cfg.csrSourcePath != null && cfg.csrCredentialPath != null);
+      message = "openvpnServerLeaf.csrSourcePath and openvpnServerLeaf.csrCredentialPath are mutually exclusive";
+    }
+    {
+      assertion = !(cfg.certificateSourcePath != null && cfg.certificateCredentialPath != null);
+      message = "openvpnServerLeaf.certificateSourcePath and openvpnServerLeaf.certificateCredentialPath are mutually exclusive";
+    }
+    {
+      assertion = !(cfg.chainSourcePath != null && cfg.chainCredentialPath != null);
+      message = "openvpnServerLeaf.chainSourcePath and openvpnServerLeaf.chainCredentialPath are mutually exclusive";
+    }
+    {
+      assertion = !(cfg.crlSourcePath != null && cfg.crlCredentialPath != null);
+      message = "openvpnServerLeaf.crlSourcePath and openvpnServerLeaf.crlCredentialPath are mutually exclusive";
+    }
+    {
+      assertion = !(cfg.metadataSourcePath != null && cfg.metadataCredentialPath != null);
+      message = "openvpnServerLeaf.metadataSourcePath and openvpnServerLeaf.metadataCredentialPath are mutually exclusive";
+    }
   ];
   runtimePaths = {
     directory = cfg.stateDir;
@@ -44,11 +92,17 @@ let
     crl_path=${lib.escapeShellArg runtimePaths.crl}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
     key_source_path=${lib.escapeShellArg (if cfg.keySourcePath == null then "" else cfg.keySourcePath)}
+    key_credential_name=${lib.escapeShellArg (if cfg.keyCredentialPath == null then "" else credentialNames.key)}
     csr_source_path=${lib.escapeShellArg (if cfg.csrSourcePath == null then "" else cfg.csrSourcePath)}
+    csr_credential_name=${lib.escapeShellArg (if cfg.csrCredentialPath == null then "" else credentialNames.csr)}
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
+    certificate_credential_name=${lib.escapeShellArg (if cfg.certificateCredentialPath == null then "" else credentialNames.certificate)}
     chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
+    chain_credential_name=${lib.escapeShellArg (if cfg.chainCredentialPath == null then "" else credentialNames.chain)}
     crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
+    crl_credential_name=${lib.escapeShellArg (if cfg.crlCredentialPath == null then "" else credentialNames.crl)}
     metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
+    metadata_credential_name=${lib.escapeShellArg (if cfg.metadataCredentialPath == null then "" else credentialNames.metadata)}
     consumer_reload_mode=${lib.escapeShellArg cfg.reloadMode}
     managed_digest_before=""
     managed_digest_after=""
@@ -61,6 +115,13 @@ let
     mkdir -p ${lib.escapeShellArg runtimeDefaults.baseStateDir}
     exec 9>"$lock_file"
     flock 9
+
+    key_source_path="$(resolve_artifact_source_path "$key_source_path" "$key_credential_name")"
+    csr_source_path="$(resolve_artifact_source_path "$csr_source_path" "$csr_credential_name")"
+    certificate_source_path="$(resolve_artifact_source_path "$certificate_source_path" "$certificate_credential_name")"
+    chain_source_path="$(resolve_artifact_source_path "$chain_source_path" "$chain_credential_name")"
+    crl_source_path="$(resolve_artifact_source_path "$crl_source_path" "$crl_credential_name")"
+    metadata_source_path="$(resolve_artifact_source_path "$metadata_source_path" "$metadata_credential_name")"
 
     mkdir -p "$state_dir"
     chmod 700 "$state_dir"
@@ -149,7 +210,7 @@ let
         ${lib.escapeShellArg runtimeDefaults.server.profile} \
         "$request_generation_key_path"
     elif [ ! -f "$candidate_csr_path" ]; then
-      printf '%s\n' "Server runtime state is missing request material; provide keySourcePath, csrSourcePath, or seed the runtime state first" >&2
+      printf '%s\n' "Server runtime state is missing request material; provide keySourcePath, keyCredentialPath, csrSourcePath, csrCredentialPath, or seed the runtime state first" >&2
       exit 1
     fi
 
@@ -267,6 +328,16 @@ in
       '';
     };
 
+    provisioningUnits = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = ''
+        Optional systemd units to start and wait for before pd-pki validates and stages runtime
+        server artifacts. Use this to order pd-pki after external secret, CSR, or certificate
+        provisioning services.
+      '';
+    };
+
     certificateSourcePath = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -276,12 +347,28 @@ in
       '';
     };
 
+    certificateCredentialPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to load as a systemd credential containing the server certificate.
+      '';
+    };
+
     keySourcePath = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
         Optional host path to an externally managed server private key to stage into the runtime
         state directory before generating or validating the CSR.
+      '';
+    };
+
+    keyCredentialPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to load as a systemd credential containing the server private key.
       '';
     };
 
@@ -295,11 +382,27 @@ in
       '';
     };
 
+    csrCredentialPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to load as a systemd credential containing the server CSR.
+      '';
+    };
+
     chainSourcePath = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
         Optional host path to a server certificate chain to stage into the runtime state directory.
+      '';
+    };
+
+    chainCredentialPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to load as a systemd credential containing the server certificate chain.
       '';
     };
 
@@ -311,12 +414,29 @@ in
       '';
     };
 
+    crlCredentialPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to load as a systemd credential containing the issuing CA CRL.
+      '';
+    };
+
     metadataSourcePath = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
         Optional host path to imported server certificate metadata JSON to stage into the runtime
         state directory.
+      '';
+    };
+
+    metadataCredentialPath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to load as a systemd credential containing imported server certificate
+        metadata JSON.
       '';
     };
 
@@ -330,51 +450,67 @@ in
     };
   };
 
-  config = lib.mkIf (cfg.enable && cfg.generateRuntimeSecrets) {
-    systemd.services.pd-pki-openvpn-server-leaf-init = {
-      description = "Initialize runtime OpenVPN server leaf artifacts for pd-pki";
-      wantedBy = [ "multi-user.target" ];
-      before = [ "multi-user.target" ];
-      path = [
-        pkgs.coreutils
-        pkgs.jq
-        pkgs.openssl
-        pkgs.systemd
-        pkgs.util-linux
-      ];
-      script = "${initScript}";
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
+  config = lib.mkIf cfg.enable (lib.mkMerge [
+    {
+      assertions = sourceConflictAssertions;
+    }
+    (lib.mkIf cfg.generateRuntimeSecrets {
+      systemd.services.pd-pki-openvpn-server-leaf-init = {
+        description = "Initialize runtime OpenVPN server leaf artifacts for pd-pki";
+        wantedBy = [ "multi-user.target" ];
+        before = [ "multi-user.target" ];
+        wants = cfg.provisioningUnits;
+        after = cfg.provisioningUnits;
+        path = [
+          pkgs.coreutils
+          pkgs.jq
+          pkgs.openssl
+          pkgs.systemd
+          pkgs.util-linux
+        ];
+        script = "${initScript}";
+        serviceConfig =
+          {
+            Type = "oneshot";
+            RemainAfterExit = true;
+          }
+          // lib.optionalAttrs (loadCredentials != [ ]) {
+            LoadCredential = loadCredentials;
+          };
       };
-    };
 
-    systemd.services.pd-pki-openvpn-server-leaf-refresh = lib.mkIf (refreshSourcePaths != [ ] && cfg.refreshInterval != null) {
-      description = "Refresh runtime OpenVPN server leaf artifacts for pd-pki";
-      after = [ "pd-pki-openvpn-server-leaf-init.service" ];
-      requires = [ "pd-pki-openvpn-server-leaf-init.service" ];
-      path = [
-        pkgs.coreutils
-        pkgs.jq
-        pkgs.openssl
-        pkgs.systemd
-        pkgs.util-linux
-      ];
-      script = "${initScript}";
-      serviceConfig = {
-        Type = "oneshot";
+      systemd.services.pd-pki-openvpn-server-leaf-refresh = lib.mkIf (refreshInputs != [ ] && cfg.refreshInterval != null) {
+        description = "Refresh runtime OpenVPN server leaf artifacts for pd-pki";
+        wants = cfg.provisioningUnits;
+        after = [ "pd-pki-openvpn-server-leaf-init.service" ] ++ cfg.provisioningUnits;
+        requires = [ "pd-pki-openvpn-server-leaf-init.service" ];
+        path = [
+          pkgs.coreutils
+          pkgs.jq
+          pkgs.openssl
+          pkgs.systemd
+          pkgs.util-linux
+        ];
+        script = "${initScript}";
+        serviceConfig =
+          {
+            Type = "oneshot";
+          }
+          // lib.optionalAttrs (loadCredentials != [ ]) {
+            LoadCredential = loadCredentials;
+          };
       };
-    };
 
-    systemd.timers.pd-pki-openvpn-server-leaf-refresh = lib.mkIf (refreshSourcePaths != [ ] && cfg.refreshInterval != null) {
-      description = "Periodically reconcile imported OpenVPN server artifacts for pd-pki";
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = cfg.refreshInterval;
-        OnUnitInactiveSec = cfg.refreshInterval;
-        Persistent = true;
-        Unit = "pd-pki-openvpn-server-leaf-refresh.service";
+      systemd.timers.pd-pki-openvpn-server-leaf-refresh = lib.mkIf (refreshInputs != [ ] && cfg.refreshInterval != null) {
+        description = "Periodically reconcile imported OpenVPN server artifacts for pd-pki";
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnBootSec = cfg.refreshInterval;
+          OnUnitInactiveSec = cfg.refreshInterval;
+          Persistent = true;
+          Unit = "pd-pki-openvpn-server-leaf-refresh.service";
+        };
       };
-    };
-  };
+    })
+  ]);
 }

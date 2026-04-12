@@ -79,9 +79,9 @@ if pkgs.stdenv.hostPlatform.isLinux then
           services.pd-pki.roles.rootCertificateAuthority = {
             enable = true;
             refreshInterval = "2s";
-            keySourcePath = "${rootFixture}/root-ca.key.pem";
-            csrSourcePath = "${rootFixture}/root-ca.csr.pem";
-            certificateSourcePath = "${rootFixture}/root-ca.cert.pem";
+            keyCredentialPath = "${rootFixture}/root-ca.key.pem";
+            csrCredentialPath = "${rootFixture}/root-ca.csr.pem";
+            certificateCredentialPath = "${rootFixture}/root-ca.cert.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/root.crl.pem";
           };
           system.stateVersion = lib.mkDefault "24.11";
@@ -98,10 +98,21 @@ if pkgs.stdenv.hostPlatform.isLinux then
             pkgs.openssl
             packages.pd-pki-signing-tools
           ];
+          systemd.services.pd-pki-intermediate-provisioner = {
+            description = "Provision intermediate request material for pd-pki test coverage";
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+            };
+            script = ''
+              install -Dm600 ${intermediateKeyFixture}/intermediate-ca.key.pem /run/pd-pki-provisioning/intermediate-ca.key.pem
+            '';
+          };
           services.pd-pki.roles.intermediateSigningAuthority = {
             enable = true;
             refreshInterval = "2s";
-            keySourcePath = "${intermediateKeyFixture}/intermediate-ca.key.pem";
+            provisioningUnits = [ "pd-pki-intermediate-provisioner.service" ];
+            keySourcePath = "/run/pd-pki-provisioning/intermediate-ca.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/intermediate.cert.pem";
             chainSourcePath = "/var/lib/pd-pki/imports/intermediate.chain.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
@@ -190,6 +201,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
 
         root_empty.wait_for_unit("pd-pki-root-certificate-authority-init.service")
         root_imported.wait_for_unit("pd-pki-root-certificate-authority-init.service")
+        intermediate.wait_for_unit("pd-pki-intermediate-provisioner.service")
         intermediate.wait_for_unit("pd-pki-intermediate-signing-authority-init.service")
         server.wait_for_unit("pd-pki-openvpn-server-leaf-init.service")
         client.wait_for_unit("pd-pki-openvpn-client-leaf-init.service")
@@ -222,6 +234,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("test \"$(stat -c %a /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem)\" = 600")
         intermediate.succeed("case \"$(readlink -f /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
         intermediate.succeed("openssl req -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.csr.pem -noout >/dev/null")
+        intermediate.succeed("test -f /run/pd-pki-provisioning/intermediate-ca.key.pem")
         intermediate.succeed("test \"$(openssl pkey -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem -pubout -outform der | sha256sum | cut -d' ' -f1)\" = \"$(openssl pkey -in ${intermediateKeyFixture}/intermediate-ca.key.pem -pubout -outform der | sha256sum | cut -d' ' -f1)\"")
         intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.cert.pem")

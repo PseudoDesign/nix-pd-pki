@@ -10,7 +10,7 @@ Nix-based PKI workflow toolkit for Pseudo Design.
 - 19 workflow steps are modeled and exported as buildable flake packages
 - 32 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
-- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, reconcile imported artifacts on a timer, and do not bootstrap a CA hierarchy on deployment nodes
+- NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, reconcile imported artifacts on a timer, can consume provisioned inputs either from direct file paths or systemd credentials, and do not bootstrap a CA hierarchy on deployment nodes
 - `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy down to the CSR key algorithm and RSA bit length, persists signer-side issuance state with automatic serial allocation under a lock, records approval and revocation attribution, and can generate CRLs from recorded revocations
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
@@ -35,7 +35,7 @@ When a role module is enabled, deployment nodes keep mutable runtime artifacts u
 
 This repository covers workflow definition, runtime artifact management, and signer-state handling. It expects some operational concerns to be provided by the surrounding environment:
 
-- runtime roles expect request material to be provisioned from outside the module: either a private key via `keySourcePath`, a CSR via `csrSourcePath`, or a pre-seeded runtime state directory. Deployments that keep keys in another secret system or behind hardware-backed custody can provide `csrSourcePath` and let pd-pki manage the CSR, certificate, chain, and CRL lifecycle around that external key
+- runtime roles expect request and import material to be provisioned from outside the module: direct file-path inputs remain available through `*SourcePath` options, the same artifacts can be scoped to the pd-pki units through `*CredentialPath` options, and roles can wait for external provisioners through `provisioningUnits`. Deployments that keep keys in another secret system or behind hardware-backed custody can provide `csrSourcePath` or `csrCredentialPath` and let pd-pki manage the CSR, certificate, chain, and CRL lifecycle around that external key
 - hardware-backed root and intermediate custody are external to this repository
 - signer-side and runtime CRL flows are included; OCSP responders and CRL distribution services remain external
 - derivation outputs use fixed reference inputs so package builds stay deterministic
@@ -186,13 +186,15 @@ Each role has a NixOS module built from [`modules/mk-role-module.nix`](/home/ada
 Each role module follows a single runtime model:
 
 - `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root key, CSR, certificate, optional CRL, and optional metadata into mutable runtime paths.
-- `services.pd-pki.roles.intermediateSigningAuthority` writes `signing-request.json`, then either derives a CSR from an operator-provided key via `keySourcePath`, stages an externally generated CSR via `csrSourcePath`, or reuses an already-seeded runtime key/CSR, and finally stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
-- `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus `san-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath`, stages an externally generated CSR via `csrSourcePath`, or reuses an already-seeded runtime key/CSR, and finally stages an imported server certificate, chain, issuer CRL, and optional metadata.
-- `services.pd-pki.roles.openvpnClientLeaf` writes `issuance-request.json` plus `identity-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath`, stages an externally generated CSR via `csrSourcePath`, or reuses an already-seeded runtime key/CSR, and finally stages an imported client certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.intermediateSigningAuthority` writes `signing-request.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or `keyCredentialPath`, stages an externally generated CSR via `csrSourcePath` or `csrCredentialPath`, or reuses an already-seeded runtime key/CSR, and finally stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus `san-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or `keyCredentialPath`, stages an externally generated CSR via `csrSourcePath` or `csrCredentialPath`, or reuses an already-seeded runtime key/CSR, and finally stages an imported server certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnClientLeaf` writes `issuance-request.json` plus `identity-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or `keyCredentialPath`, stages an externally generated CSR via `csrSourcePath` or `csrCredentialPath`, or reuses an already-seeded runtime key/CSR, and finally stages an imported client certificate, chain, issuer CRL, and optional metadata.
 
 Imported runtime artifacts are validated before they replace the live files. The modules reject certificate/key or certificate/CSR mismatches, broken chains, wrong EKUs or SANs for leaf roles, CA/profile mismatches for intermediate roles, invalid CRLs, expired CRLs, and metadata that does not match the staged certificate. Updated imports are written through a staging directory first so failed validation leaves the existing runtime state untouched.
 
-If a role has source paths configured, it also enables a periodic refresh timer. The timer re-runs validation and staging automatically, and roles can optionally reload or restart dependent systemd units through `reloadUnits` and `reloadMode` when the staged runtime artifacts actually change.
+Provisioned inputs can be supplied as plain file paths through `*SourcePath` options or loaded into the pd-pki units as systemd credentials through `*CredentialPath` options. `provisioningUnits` lets a role start and wait for external provisioners such as Vault agents, secret sync jobs, or CSR exporters before it validates anything.
+
+If a role has source paths or credential paths configured, it also enables a periodic refresh timer. The timer re-runs validation and staging automatically, and roles can optionally reload or restart dependent systemd units through `reloadUnits` and `reloadMode` when the staged runtime artifacts actually change.
 
 Available option paths are:
 
@@ -210,8 +212,9 @@ Example:
   services.pd-pki.roles.openvpnServerLeaf = {
     enable = true;
     refreshInterval = "5m";
+    provisioningUnits = [ "vault-agent.service" ];
     reloadUnits = [ "openvpn-server.service" ];
-    keySourcePath = "/run/secrets/openvpn/server.key.pem";
+    keyCredentialPath = "/run/secrets/openvpn/server.key.pem";
     certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/server.chain.pem";
     crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
@@ -271,7 +274,7 @@ pd-pki-signing-tools import-signed \
   --signed-dir /tmp/server-signed
 ```
 
-The request-export step works the same way whether the node prepared its CSR from a staged PEM key via `keySourcePath` or received the CSR directly via `csrSourcePath`.
+The request-export step works the same way whether the node prepared its CSR from a staged PEM key via `keySourcePath` or `keyCredentialPath`, or received the CSR directly via `csrSourcePath` or `csrCredentialPath`.
 
 When `sign-request` runs with `--signer-state-dir`, it requires `--policy-file`, acquires an advisory lock for the signer state, allocates the next serial automatically, and records the issuance under a signer-managed state tree:
 

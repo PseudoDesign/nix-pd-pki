@@ -70,6 +70,28 @@ prepare_candidate_artifact() {
   fi
 }
 
+resolve_artifact_source_path() {
+  local direct_path="$1"
+  local credential_name="$2"
+  local credentials_directory="${CREDENTIALS_DIRECTORY:-}"
+
+  if [ -n "$direct_path" ] && [ -n "$credential_name" ]; then
+    printf '%s\n' "Artifact source cannot use both a direct path and a systemd credential" >&2
+    return 1
+  fi
+
+  if [ -n "$credential_name" ]; then
+    if [ -z "$credentials_directory" ]; then
+      printf '%s\n' "Systemd credentials directory is not available for credential-backed artifact input" >&2
+      return 1
+    fi
+    printf '%s' "${credentials_directory}/${credential_name}"
+    return 0
+  fi
+
+  printf '%s' "$direct_path"
+}
+
 install_candidate_artifact() {
   local candidate_path="$1"
   local target_path="$2"

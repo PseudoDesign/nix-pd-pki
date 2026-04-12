@@ -27,6 +27,11 @@ let
   };
 
   baseModule = { lib, ... }: {
+    options.assertions = lib.mkOption {
+      type = lib.types.listOf lib.types.anything;
+      default = [ ];
+    };
+
     options.environment = {
       systemPackages = lib.mkOption {
         type = lib.types.listOf lib.types.package;

@@ -63,11 +63,21 @@
       apps = forAllSystems (
         pkgs:
         let
+          packages = import ./packages {
+            inherit pkgs definitions;
+          };
           appPackages = import ./apps {
-            inherit pkgs definitions checkNames;
+            inherit pkgs definitions checkNames packages;
           };
         in
         {
+          pd-pki-operator = {
+            type = "app";
+            program = "${appPackages.pdPkiOperator}/bin/pd-pki-operator";
+            meta = {
+              description = "Run the interactive PKI operator wizard for USB-guided request export, signing, import, and CRL handoff.";
+            };
+          };
           test-report = {
             type = "app";
             program = "${appPackages.testReport}/bin/test-report";

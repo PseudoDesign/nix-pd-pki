@@ -27,6 +27,10 @@ let
     inherit pkgs;
   };
 
+  pdPkiOperator = import ./pd-pki-operator.nix {
+    inherit pkgs;
+  };
+
   rolePackages = {
     pd-pki = pkgs.linkFarm "pd-pki" [
       {
@@ -52,6 +56,7 @@ let
     openvpn-server-leaf = openvpnServerLeaf;
     openvpn-client-leaf = openvpnClientLeaf;
     pd-pki-signing-tools = pdPkiSigningTools;
+    pd-pki-operator = pdPkiOperator;
   };
 
   stepPackages =

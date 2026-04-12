@@ -12,6 +12,7 @@ Nix-based PKI workflow toolkit for Pseudo Design.
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
 - NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, reconcile imported artifacts on a timer, can consume provisioned inputs either from direct file paths or systemd credentials, and do not bootstrap a CA hierarchy on deployment nodes
 - `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy down to the CSR key algorithm and RSA bit length, persists signer-side issuance state with automatic serial allocation under a lock, records approval and revocation attribution, and can generate CRLs from recorded revocations
+- `pd-pki-operator` provides an interactive terminal TUI for USB-guided request export, offline signing, signed-bundle import, and CRL handoff
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
 ## Repository Model
@@ -97,6 +98,7 @@ The flake exports the following top-level outputs:
 - `packages`
   - `pd-pki`
   - `pd-pki-signing-tools`
+  - `pd-pki-operator`
   - one package per role
   - one package per workflow step, named `<role-id>-<step-id>`
 - `checks`
@@ -113,6 +115,7 @@ The flake exports the following top-level outputs:
   - `openvpn-server-leaf`
   - `openvpn-client-leaf`
 - `apps.test-report`
+- `apps.pd-pki-operator`
 - `lib`
   - `definitions`
   - `roles`
@@ -238,6 +241,7 @@ Build it with:
 
 ```bash
 nix build .#pd-pki-signing-tools
+nix build .#pd-pki-operator
 ```
 
 A typical request, signing, and import flow looks like this:
@@ -371,6 +375,31 @@ That writes `crl.pem` and `metadata.json` into `--out-dir`, updates `<signer-sta
 
 Exported request bundles always include `request.json`, the canonical CSR filename for the role, and any role-specific manifest such as `san-manifest.json` or `identity-manifest.json`. Signed bundles contain the issued certificate, `chain.pem`, `metadata.json`, and a copy of the normalized `request.json`.
 
+## Interactive Operator Wizard
+
+The repository also ships an interactive terminal TUI as the `pd-pki-operator` package and flake app. It wraps the existing `pd-pki-signing-tools` commands with an operator-guided flow for removable-media handoff:
+
+- export request bundles to a mounted USB volume
+- sign request bundles from a mounted USB volume and copy the signed result back to that volume
+- import signed bundles from a mounted USB volume into runtime state
+- generate CRLs and copy them to a mounted USB volume
+
+Run it with:
+
+```bash
+nix run .#pd-pki-operator
+```
+
+The first version is intentionally conservative:
+
+- in an interactive terminal it uses a full-screen `dialog` interface and live wait screens that refresh while USB media or a YubiKey is being inserted
+- signing still uses file-based issuer key paths and the existing `pd-pki-signing-tools sign-request` backend
+- YubiKey detection is informational only in this build; the wizard can show when a YubiKey is present, but it does not yet perform PKCS#11 or PIV-backed signing
+- removable-volume auto-detection uses `lsblk` when available and always offers a manual mounted-path fallback
+- `PD_PKI_OPERATOR_PLAIN=1` forces the original line-oriented prompt mode when desired
+
+The wizard writes transfer material beneath `pd-pki-transfer/` on the selected removable volume so request, signed, and CRL bundles stay grouped cleanly during air-gapped handoff.
+
 ## Usage
 
 Build the aggregate package:
@@ -387,6 +416,7 @@ nix build .#intermediate-signing-authority
 nix build .#openvpn-server-leaf
 nix build .#openvpn-client-leaf
 nix build .#pd-pki-signing-tools
+nix build .#pd-pki-operator
 ```
 
 Build a single workflow step:
@@ -414,6 +444,7 @@ Generate a report for the exported checks:
 ```bash
 nix run .#test-report
 nix run .#test-report -- --verbose
+nix run .#pd-pki-operator -- --help
 ```
 
 `test-report` writes output to `reports/test-report-<timestamp>/` and produces:
@@ -444,7 +475,8 @@ Key files:
 - [`packages/definitions.nix`](/home/adam/pd-pki/packages/definitions.nix) is the source of truth for role and step contracts
 - [`packages/pki-workflow-lib.sh`](/home/adam/pd-pki/packages/pki-workflow-lib.sh) contains the OpenSSL helper functions used by the role packages and runtime module validation scripts
 - [`packages/pd-pki-signing-tools.nix`](/home/adam/pd-pki/packages/pd-pki-signing-tools.nix) defines the external signer, signer-state, and CRL tooling
-- [`apps/default.nix`](/home/adam/pd-pki/apps/default.nix) defines the `test-report` app
+- [`packages/pd-pki-operator.nix`](/home/adam/pd-pki/packages/pd-pki-operator.nix) defines the interactive removable-media operator wizard
+- [`apps/default.nix`](/home/adam/pd-pki/apps/default.nix) defines the `test-report` and `pd-pki-operator` apps
 
 ## Verified Commands
 
@@ -456,3 +488,4 @@ These commands resolve successfully in the repository:
 - `nix build --no-link .#checks.x86_64-linux.role-topology .#checks.x86_64-linux.openvpn-daemon .#checks.x86_64-linux.pd-pki .#checks.x86_64-linux.nixos-module-default`
 - `nix eval --json .#lib.definitions | jq '.roleCount, .stepCount'`
 - `nix run .#test-report -- --help`
+- `nix run .#pd-pki-operator -- --help`

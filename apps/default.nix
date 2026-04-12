@@ -2,6 +2,7 @@
   pkgs,
   definitions,
   checkNames,
+  packages,
 }:
 let
   sharedCheckManifest = [
@@ -67,6 +68,8 @@ let
   checkManifest =
     assert map (check: check.name) checkManifestData == checkNames;
     pkgs.writeText "pd-pki-check-manifest.json" (builtins.toJSON checkManifestData);
+
+  pdPkiOperator = packages.pd-pki-operator;
 
   testReport = pkgs.writeShellApplication {
     name = "test-report";
@@ -499,5 +502,5 @@ EOF
   };
 in
 {
-  inherit testReport;
+  inherit testReport pdPkiOperator;
 }

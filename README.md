@@ -237,6 +237,9 @@ Example:
 
 The repository ships a small operator CLI as the `pd-pki-signing-tools` package. It turns the runtime artifacts emitted by the NixOS modules into portable request bundles, signs those bundles with an external issuer, and imports the signed results back into the mutable runtime paths.
 
+For a manual, CLI-only offline-root procedure, see
+[`docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md`](docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md).
+
 Build it with:
 
 ```bash

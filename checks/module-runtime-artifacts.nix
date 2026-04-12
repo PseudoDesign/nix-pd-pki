@@ -102,7 +102,6 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.intermediateSigningAuthority = {
             enable = true;
-            allowLocalKeyGeneration = false;
             refreshInterval = "2s";
             keySourcePath = "${intermediateKeyFixture}/intermediate-ca.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/intermediate.cert.pem";
@@ -137,7 +136,6 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnServerLeaf = {
             enable = true;
-            allowLocalKeyGeneration = false;
             refreshInterval = "2s";
             keySourcePath = "${serverKeyFixture}/server.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
@@ -171,7 +169,6 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnClientLeaf = {
             enable = true;
-            allowLocalKeyGeneration = false;
             refreshInterval = "2s";
             csrSourcePath = "${clientCsrFixture}/client.csr.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";

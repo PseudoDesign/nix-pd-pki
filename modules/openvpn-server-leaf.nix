@@ -49,7 +49,6 @@ let
     chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
     crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
     metadata_source_path=${lib.escapeShellArg (if cfg.metadataSourcePath == null then "" else cfg.metadataSourcePath)}
-    allow_local_key_generation=${if cfg.allowLocalKeyGeneration then "1" else "0"}
     consumer_reload_mode=${lib.escapeShellArg cfg.reloadMode}
     managed_digest_before=""
     managed_digest_after=""
@@ -156,18 +155,8 @@ let
         ${lib.escapeShellArg (toString cfg.rsaKeyBits)} \
         "$request_generation_key_path"
     elif [ ! -f "$candidate_csr_path" ]; then
-      if [ "$allow_local_key_generation" != "1" ]; then
-        printf '%s\n' "Refusing to generate a server key locally; provide keySourcePath, csrSourcePath, or seed the runtime state first" >&2
-        exit 1
-      fi
-      generate_tls_request \
-        "$request_material_dir" \
-        ${lib.escapeShellArg runtimeDefaults.server.basename} \
-        ${lib.escapeShellArg cfg.commonName} \
-        ${lib.escapeShellArg sanSpec} \
-        ${lib.escapeShellArg runtimeDefaults.server.profile} \
-        ${lib.escapeShellArg cfg.keyAlgorithm} \
-        ${lib.escapeShellArg (toString cfg.rsaKeyBits)}
+      printf '%s\n' "Server runtime state is missing request material; provide keySourcePath, csrSourcePath, or seed the runtime state first" >&2
+      exit 1
     fi
 
     [ -f "$candidate_csr_path" ] ||
@@ -273,15 +262,6 @@ in
       default = true;
       description = ''
         Whether to run the runtime initialization service for the OpenVPN server role.
-      '';
-    };
-
-    allowLocalKeyGeneration = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Whether the module may generate a runtime server private key locally when no key is
-        provided through `keySourcePath` or the existing runtime state.
       '';
     };
 

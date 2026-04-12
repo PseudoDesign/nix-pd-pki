@@ -29,6 +29,14 @@ let
     mkdir -p "$out"
     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$out/server.key.pem"
   '';
+
+  clientKeyFixture = pkgs.runCommand "pd-pki-client-openvpn-daemon-key-fixture" {
+    nativeBuildInputs = [ pkgs.openssl ];
+  } ''
+    set -euo pipefail
+    mkdir -p "$out"
+    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$out/client.key.pem"
+  '';
 in
 if pkgs.stdenv.hostPlatform.isLinux then
   pkgs.testers.runNixOSTest {
@@ -86,7 +94,6 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.intermediateSigningAuthority = {
             enable = true;
-            allowLocalKeyGeneration = false;
             refreshInterval = "1h";
             keySourcePath = "${intermediateKeyFixture}/intermediate-ca.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/intermediate.cert.pem";
@@ -123,7 +130,6 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnServerLeaf = {
             enable = true;
-            allowLocalKeyGeneration = false;
             refreshInterval = "1h";
             keySourcePath = "${serverKeyFixture}/server.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
@@ -194,6 +200,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
           services.pd-pki.roles.openvpnClientLeaf = {
             enable = true;
             refreshInterval = "1h";
+            keySourcePath = "${clientKeyFixture}/client.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
             chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";

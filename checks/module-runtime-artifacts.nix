@@ -27,6 +27,26 @@ let
     mkdir -p "$out"
     openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$out/server.key.pem"
   '';
+  clientCsrFixture = pkgs.runCommand "pd-pki-client-runtime-csr-fixture" {
+    nativeBuildInputs = [
+      pkgs.openssl
+      pkgs.jq
+    ];
+  } ''
+    set -euo pipefail
+    source ${../packages/pki-workflow-lib.sh}
+
+    mkdir -p "$out"
+    generate_tls_request \
+      "$out" \
+      "client" \
+      "client-01.pseudo.test" \
+      "DNS:client-01.pseudo.test" \
+      "clientAuth" \
+      "rsa" \
+      "3072"
+    rm -f "$out/client.key.pem"
+  '';
 in
 if pkgs.stdenv.hostPlatform.isLinux then
   pkgs.testers.runNixOSTest {
@@ -151,7 +171,9 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnClientLeaf = {
             enable = true;
+            allowLocalKeyGeneration = false;
             refreshInterval = "2s";
+            csrSourcePath = "${clientCsrFixture}/client.csr.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
             chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
             crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
@@ -224,7 +246,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         server.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         server.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem")
 
-        client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/client.key.pem")
+        client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/client.key.pem")
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/client.csr.pem")
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/issuance-request.json")
         client.succeed("test -f /var/lib/pd-pki/openvpn-client-leaf/identity-manifest.json")
@@ -232,9 +254,9 @@ if pkgs.stdenv.hostPlatform.isLinux then
         client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/chain.pem")
         client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/crl.pem")
         client.succeed("test ! -e /var/lib/pd-pki/openvpn-client-leaf/certificate-metadata.json")
-        client.succeed("test \"$(stat -c %a /var/lib/pd-pki/openvpn-client-leaf/client.key.pem)\" = 600")
-        client.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-client-leaf/client.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
         client.succeed("openssl req -in /var/lib/pd-pki/openvpn-client-leaf/client.csr.pem -noout >/dev/null")
+        client.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-client-leaf/client.csr.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
+        client.succeed("test \"$(openssl req -in /var/lib/pd-pki/openvpn-client-leaf/client.csr.pem -pubkey -noout | openssl pkey -pubin -outform der | sha256sum | cut -d' ' -f1)\" = \"$(openssl req -in ${clientCsrFixture}/client.csr.pem -pubkey -noout | openssl pkey -pubin -outform der | sha256sum | cut -d' ' -f1)\"")
         client.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         client.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem")
 

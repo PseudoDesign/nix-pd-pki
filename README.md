@@ -29,13 +29,13 @@ Each role package produces:
 
 The aggregate `pd-pki` package is a link farm that exposes the four role packages together.
 
-When a role module is enabled, deployment nodes keep mutable runtime artifacts under `/var/lib/pd-pki/...`, generate only the local key and CSR material they own where appropriate, emit signer-facing JSON request metadata, and expect certificates and chains to be staged from an external signing workflow.
+When a role module is enabled, deployment nodes keep mutable runtime artifacts under `/var/lib/pd-pki/...`, emit signer-facing JSON request metadata, accept either a managed private key or an externally generated CSR for request material, and expect certificates and chains to be staged from an external signing workflow.
 
 ## Operational Boundaries
 
 This repository covers workflow definition, runtime artifact management, and signer-state handling. It expects some operational concerns to be provided by the surrounding environment:
 
-- runtime private keys are generated in software under `/var/lib/pd-pki` by default unless you provide `keySourcePath`; concrete HSM, TPM, or Vault integration is expected to come from the deployment environment
+- runtime private keys are generated in software under `/var/lib/pd-pki` by default unless you provide `keySourcePath`; deployments that keep keys in another secret system or behind hardware-backed custody can provide `csrSourcePath` instead and let pd-pki manage the CSR, certificate, chain, and CRL lifecycle around that external key
 - hardware-backed root and intermediate custody are external to this repository
 - signer-side and runtime CRL flows are included; OCSP responders and CRL distribution services remain external
 - derivation outputs use fixed reference inputs so package builds stay deterministic
@@ -186,9 +186,9 @@ Each role has a NixOS module built from [`modules/mk-role-module.nix`](/home/ada
 Each role module follows a single runtime model:
 
 - `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root key, CSR, certificate, optional CRL, and optional metadata into mutable runtime paths.
-- `services.pd-pki.roles.intermediateSigningAuthority` writes `signing-request.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local CA key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
-- `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus `san-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported server certificate, chain, issuer CRL, and optional metadata.
-- `services.pd-pki.roles.openvpnClientLeaf` writes `issuance-request.json` plus `identity-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported client certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.intermediateSigningAuthority` writes `signing-request.json`, then either derives a CSR from an operator-provided key via `keySourcePath`, stages an externally generated CSR via `csrSourcePath`, or generates a local CA key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus `san-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath`, stages an externally generated CSR via `csrSourcePath`, or generates a local key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported server certificate, chain, issuer CRL, and optional metadata.
+- `services.pd-pki.roles.openvpnClientLeaf` writes `issuance-request.json` plus `identity-manifest.json`, then either derives a CSR from an operator-provided key via `keySourcePath`, stages an externally generated CSR via `csrSourcePath`, or generates a local key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported client certificate, chain, issuer CRL, and optional metadata.
 
 Imported runtime artifacts are validated before they replace the live files. The modules reject certificate/key or certificate/CSR mismatches, broken chains, wrong EKUs or SANs for leaf roles, CA/profile mismatches for intermediate roles, invalid CRLs, expired CRLs, and metadata that does not match the staged certificate. Updated imports are written through a staging directory first so failed validation leaves the existing runtime state untouched.
 
@@ -220,6 +220,8 @@ Example:
 
   services.pd-pki.roles.openvpnClientLeaf = {
     enable = true;
+    allowLocalKeyGeneration = false;
+    csrSourcePath = "/run/secrets/openvpn/client.csr.pem";
     certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
     crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
@@ -270,6 +272,8 @@ pd-pki-signing-tools import-signed \
   --state-dir /var/lib/pd-pki/openvpn-server-leaf \
   --signed-dir /tmp/server-signed
 ```
+
+The request-export step works the same way whether the node prepared its CSR from a staged PEM key via `keySourcePath` or received the CSR directly via `csrSourcePath`.
 
 When `sign-request` runs with `--signer-state-dir`, it requires `--policy-file`, acquires an advisory lock for the signer state, allocates the next serial automatically, and records the issuance under a signer-managed state tree:
 

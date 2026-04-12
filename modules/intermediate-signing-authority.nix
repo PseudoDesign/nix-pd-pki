@@ -9,6 +9,7 @@ let
   cfg = config.services.pd-pki.roles.intermediateSigningAuthority;
   refreshSourcePaths = builtins.filter (path: path != null) [
     cfg.keySourcePath
+    cfg.csrSourcePath
     cfg.certificateSourcePath
     cfg.chainSourcePath
     cfg.crlSourcePath
@@ -40,6 +41,7 @@ let
     crl_path=${lib.escapeShellArg runtimePaths.crl}
     metadata_path=${lib.escapeShellArg runtimePaths.metadata}
     key_source_path=${lib.escapeShellArg (if cfg.keySourcePath == null then "" else cfg.keySourcePath)}
+    csr_source_path=${lib.escapeShellArg (if cfg.csrSourcePath == null then "" else cfg.csrSourcePath)}
     certificate_source_path=${lib.escapeShellArg (if cfg.certificateSourcePath == null then "" else cfg.certificateSourcePath)}
     chain_source_path=${lib.escapeShellArg (if cfg.chainSourcePath == null then "" else cfg.chainSourcePath)}
     crl_source_path=${lib.escapeShellArg (if cfg.crlSourcePath == null then "" else cfg.crlSourcePath)}
@@ -91,13 +93,35 @@ let
     candidate_key_path="$request_material_dir/intermediate-ca.key.pem"
     candidate_csr_path="$request_material_dir/intermediate-ca.csr.pem"
     request_generation_key_path=""
+    csr_from_source=0
 
     prepare_candidate_artifact "$key_path" "$key_source_path" "$candidate_key_path" 600
-    prepare_candidate_artifact "$csr_path" "" "$candidate_csr_path" 644
+    prepare_candidate_artifact "$csr_path" "$csr_source_path" "$candidate_csr_path" 644
+
+    if [ -n "$csr_source_path" ] && [ -f "$csr_source_path" ]; then
+      csr_from_source=1
+    fi
 
     if [ -f "$candidate_key_path" ] && [ -f "$candidate_csr_path" ]; then
-      if ! private_key_matches_csr "$candidate_key_path" "$candidate_csr_path" || ! validate_intermediate_csr_matches_request "$candidate_csr_path" "$request_path"; then
+      if ! private_key_matches_csr "$candidate_key_path" "$candidate_csr_path"; then
+        if [ "$csr_from_source" = "1" ]; then
+          printf '%s\n' "Provided intermediate CSR does not match the staged private key" >&2
+          exit 1
+        fi
         rm -f "$candidate_csr_path"
+      fi
+    fi
+
+    if [ -f "$candidate_csr_path" ] && ! validate_intermediate_csr_matches_request "$candidate_csr_path" "$request_path"; then
+      if [ "$csr_from_source" = "1" ]; then
+        printf '%s\n' "Provided intermediate CSR does not match signing-request.json" >&2
+        exit 1
+      fi
+      if [ -f "$candidate_key_path" ]; then
+        rm -f "$candidate_csr_path"
+      else
+        printf '%s\n' "Staged intermediate CSR does not match signing-request.json and cannot be regenerated without a private key" >&2
+        exit 1
       fi
     fi
 
@@ -116,9 +140,9 @@ let
         ${lib.escapeShellArg cfg.keyAlgorithm} \
         ${lib.escapeShellArg (toString cfg.rsaKeyBits)} \
         "$request_generation_key_path"
-    elif [ ! -f "$candidate_key_path" ] && [ ! -f "$candidate_csr_path" ]; then
+    elif [ ! -f "$candidate_csr_path" ]; then
       if [ "$allow_local_key_generation" != "1" ]; then
-        printf '%s\n' "Refusing to generate an intermediate key locally; provide keySourcePath or seed the runtime state first" >&2
+        printf '%s\n' "Refusing to generate an intermediate key locally; provide keySourcePath, csrSourcePath, or seed the runtime state first" >&2
         exit 1
       fi
       generate_ca_request \
@@ -128,22 +152,14 @@ let
         ${lib.escapeShellArg cfg.pathLen} \
         ${lib.escapeShellArg cfg.keyAlgorithm} \
         ${lib.escapeShellArg (toString cfg.rsaKeyBits)}
-    elif [ ! -f "$candidate_key_path" ] && [ -f "$candidate_csr_path" ] && [ "$allow_local_key_generation" = "1" ] && [ -z "$certificate_source_path" ] && [ ! -f "$cert_path" ]; then
-      rm -f "$candidate_csr_path"
-      generate_ca_request \
-        "$request_material_dir" \
-        ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
-        ${lib.escapeShellArg cfg.commonName} \
-        ${lib.escapeShellArg cfg.pathLen} \
-        ${lib.escapeShellArg cfg.keyAlgorithm} \
-        ${lib.escapeShellArg (toString cfg.rsaKeyBits)}
-    elif [ ! -f "$candidate_key_path" ] && [ -f "$candidate_csr_path" ]; then
-      printf '%s\n' "Refusing to keep an intermediate CSR without a matching private key in $state_dir" >&2
-      exit 1
     fi
 
-    private_key_matches_csr "$candidate_key_path" "$candidate_csr_path" ||
-      { printf '%s\n' "Intermediate private key does not match the staged CSR" >&2; exit 1; }
+    [ -f "$candidate_csr_path" ] ||
+      { printf '%s\n' "Intermediate runtime state is missing a CSR" >&2; exit 1; }
+    if [ -f "$candidate_key_path" ]; then
+      private_key_matches_csr "$candidate_key_path" "$candidate_csr_path" ||
+        { printf '%s\n' "Intermediate private key does not match the staged CSR" >&2; exit 1; }
+    fi
     validate_intermediate_csr_matches_request "$candidate_csr_path" "$request_path" ||
       { printf '%s\n' "Intermediate CSR does not match signing-request.json" >&2; exit 1; }
 
@@ -297,6 +313,17 @@ in
       description = ''
         Optional host path to an externally managed intermediate private key to stage into the
         runtime state directory before generating or validating the CSR.
+      '';
+    };
+
+    csrSourcePath = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Optional host path to an externally managed intermediate CSR to stage into the runtime
+        state directory. This supports deployments where the intermediate private key is
+        provisioned or held by another system and pd-pki should manage only the CSR, certificate
+        chain, and CRL imports.
       '';
     };
 

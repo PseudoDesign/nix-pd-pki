@@ -1,10 +1,10 @@
 # pd-pki
 
-Nix-based PKI workflow fixtures for Pseudo Design.
+Nix-based PKI workflow toolkit for Pseudo Design.
 
-This repository is no longer just a scaffold. It now builds deterministic, machine-readable PKI workflow outputs for four certificate roles and validates them with Nix checks, NixOS module evaluation, and Linux VM tests.
+`pd-pki` publishes deterministic, machine-readable PKI workflow outputs for four certificate roles, provides NixOS modules for managing mutable runtime artifacts, and ships signer tooling for external issuance, import, revocation, and CRL generation.
 
-## Current State
+## Overview
 
 - 4 roles are implemented: root CA, intermediate signing authority, OpenVPN server leaf, and OpenVPN client leaf
 - 19 workflow steps are modeled and exported as buildable flake packages
@@ -14,9 +14,9 @@ This repository is no longer just a scaffold. It now builds deterministic, machi
 - `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy down to the CSR key algorithm and RSA bit length, persists signer-side issuance state with automatic serial allocation under a lock, records approval and revocation attribution, and can generate CRLs from recorded revocations
 - a `test-report` app runs all exported checks and writes Markdown and JSON reports
 
-## What This Repository Is Today
+## Repository Model
 
-`pd-pki` currently models PKI workflows as deterministic Nix derivations built with `openssl` and `jq`.
+`pd-pki` models PKI workflows as deterministic Nix derivations built with `openssl` and `jq`.
 
 Each role package produces:
 
@@ -31,15 +31,15 @@ The aggregate `pd-pki` package is a link farm that exposes the four role package
 
 When a role module is enabled, deployment nodes keep mutable runtime artifacts under `/var/lib/pd-pki/...`, generate only the local key and CSR material they own where appropriate, emit signer-facing JSON request metadata, and expect certificates and chains to be staged from an external signing workflow.
 
-## What It Is Not Yet
+## Operational Boundaries
 
-This repo is still test-oriented rather than production-ready PKI automation:
+This repository covers workflow definition, runtime artifact management, and signer-state handling. It expects some operational concerns to be provided by the surrounding environment:
 
-- private keys used for runtime services are still generated in software under `/var/lib/pd-pki` by default unless you provide `keySourcePath`; the repo does not yet ship a concrete HSM, TPM, or Vault integration
-- root and intermediate hardware-backed flows are simulated, not integrated with YubiKey or HSM hardware
-- signer-side and runtime CRL flows are implemented, but there is still no OCSP responder or distribution service
-- issuance inputs are fixed representative values baked into the derivations today
-- role packages still model certificate authorities as deterministic fixtures rather than an offline or HSM-backed production signing workflow
+- runtime private keys are generated in software under `/var/lib/pd-pki` by default unless you provide `keySourcePath`; concrete HSM, TPM, or Vault integration is expected to come from the deployment environment
+- hardware-backed root and intermediate custody are external to this repository
+- signer-side and runtime CRL flows are included; OCSP responders and CRL distribution services remain external
+- derivation outputs use fixed reference inputs so package builds stay deterministic
+- role packages publish deterministic reference artifacts and workflow contracts rather than live CA state from an offline or HSM-backed signing environment
 
 ## Implemented Roles
 
@@ -53,7 +53,7 @@ Implements 5 steps:
 - `revoke-intermediate-ca-certificate`
 - `publish-root-trust-artifacts`
 
-This package creates a deterministic self-signed test root CA, simulates root rotation, signs a representative intermediate CA, records revocation metadata for that intermediate, and publishes a root trust bundle.
+This package creates a deterministic reference root CA, simulates root rotation, signs a representative intermediate CA, records revocation metadata for that intermediate, and publishes a root trust bundle.
 
 ### Intermediate Signing Authority
 
@@ -66,7 +66,7 @@ Implements 6 steps:
 - `revoke-leaf-certificate`
 - `publish-intermediate-trust-artifacts`
 
-This package creates and rotates an intermediate CA signed by the test root, signs representative OpenVPN server and client certificates, records leaf revocation metadata, and publishes an intermediate trust bundle.
+This package creates and rotates an intermediate CA signed by the reference root, signs representative OpenVPN server and client certificates, records leaf revocation metadata, and publishes an intermediate trust bundle.
 
 ### OpenVPN Server Leaf
 
@@ -77,7 +77,7 @@ Implements 4 steps:
 - `rotate-openvpn-server-certificate`
 - `consume-server-trust-updates`
 
-This package generates a representative server CSR, signs and packages a public deployment bundle, creates a rotated server certificate, and stages trust updates for server-side validation. Runtime server keys live under `/var/lib/pd-pki/openvpn-server-leaf`.
+This package generates a reference server CSR, signs and packages a public deployment bundle, creates a rotated server certificate, and stages trust updates for server-side validation. Runtime server keys live under `/var/lib/pd-pki/openvpn-server-leaf`.
 
 ### OpenVPN Client Leaf
 
@@ -88,7 +88,7 @@ Implements 4 steps:
 - `rotate-openvpn-client-certificate`
 - `consume-client-trust-updates`
 
-This package generates a representative client CSR, signs and packages a public client credential bundle, creates a rotated client certificate, and stages trust updates for client-side validation. Runtime client keys live under `/var/lib/pd-pki/openvpn-client-leaf`.
+This package generates a reference client CSR, signs and packages a public client credential bundle, creates a rotated client certificate, and stages trust updates for client-side validation. Runtime client keys live under `/var/lib/pd-pki/openvpn-client-leaf`.
 
 ## Flake Outputs
 
@@ -146,7 +146,7 @@ result/
 
 Building a step package yields the corresponding `steps/<step-id>` directory directly.
 
-Representative artifact types currently include:
+Artifact types include:
 
 - self-signed and issued X.509 certificates
 - CSRs
@@ -158,7 +158,7 @@ Representative artifact types currently include:
 
 ## Validation
 
-Checks in [`checks/`](/home/adam/pd-pki/checks) currently cover:
+Checks in [`checks/`](/home/adam/pd-pki/checks) cover:
 
 - aggregate package wiring
 - role and step artifact presence
@@ -181,7 +181,7 @@ Each role has a NixOS module built from [`modules/mk-role-module.nix`](/home/ada
 - can add the role package to `environment.systemPackages`
 - exposes read-only `definition` and `stepIds` values derived from the workflow contract
 
-Each role module now has a single runtime behavior:
+Each role module follows a single runtime model:
 
 - `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root key, CSR, certificate, optional CRL, and optional metadata into mutable runtime paths.
 - `services.pd-pki.roles.intermediateSigningAuthority` writes `signing-request.json`, then either derives a CSR from an operator-provided key via `keySourcePath` or generates a local CA key and CSR if `allowLocalKeyGeneration = true`, and finally stages an imported intermediate certificate, chain, optional CRL, and optional metadata.
@@ -227,7 +227,7 @@ Example:
 
 ## External Signer Workflow
 
-The repo now ships a small operator CLI as the `pd-pki-signing-tools` package. It turns the runtime artifacts emitted by the NixOS modules into portable request bundles, signs those bundles with an external issuer, and imports the signed results back into the mutable runtime paths.
+The repository ships a small operator CLI as the `pd-pki-signing-tools` package. It turns the runtime artifacts emitted by the NixOS modules into portable request bundles, signs those bundles with an external issuer, and imports the signed results back into the mutable runtime paths.
 
 Build it with:
 
@@ -235,7 +235,7 @@ Build it with:
 nix build .#pd-pki-signing-tools
 ```
 
-Typical flow:
+A typical request, signing, and import flow looks like this:
 
 1. On the request-generating node, export a signer bundle:
 
@@ -249,7 +249,7 @@ pd-pki-signing-tools export-request \
 2. On the signer, sign the bundle with the issuing CA key and certificate plus an explicit signer policy and approval attribution:
 
 ```bash
-  pd-pki-signing-tools sign-request \
+pd-pki-signing-tools sign-request \
   --request-dir /tmp/server-request \
   --out-dir /tmp/server-signed \
   --issuer-key /secure/issuer/intermediate-ca.key.pem \
@@ -269,7 +269,7 @@ pd-pki-signing-tools import-signed \
   --signed-dir /tmp/server-signed
 ```
 
-When `sign-request` runs with `--signer-state-dir`, it now requires `--policy-file`, acquires an advisory lock for the signer state, allocates the next serial automatically, and records the issuance under a signer-managed state tree:
+When `sign-request` runs with `--signer-state-dir`, it requires `--policy-file`, acquires an advisory lock for the signer state, allocates the next serial automatically, and records the issuance under a signer-managed state tree:
 
 ```text
 <signer-state-dir>/
@@ -441,7 +441,7 @@ Key files:
 
 ## Verified Commands
 
-These commands resolve successfully in the repo as of the current state of this README:
+These commands resolve successfully in the repository:
 
 - `nix build --no-link --print-out-paths .#root-certificate-authority`
 - `nix build --no-link .#root-certificate-authority-create-root-ca`

@@ -82,8 +82,6 @@ let
       --arg commonName ${lib.escapeShellArg cfg.commonName} \
       --argjson subjectAltNames ${lib.escapeShellArg (builtins.toJSON cfg.subjectAltNames)} \
       --arg requestedProfile ${lib.escapeShellArg runtimeDefaults.client.profile} \
-      --arg requestedKeyAlgorithm ${lib.escapeShellArg cfg.keyAlgorithm} \
-      --arg requestedRsaKeyBits ${lib.escapeShellArg (toString cfg.rsaKeyBits)} \
       --arg requestedDays ${lib.escapeShellArg runtimeDefaults.client.days} \
       --arg csrFile "$(basename "$csr_path")" \
       '{
@@ -94,8 +92,6 @@ let
         commonName: $commonName,
         subjectAltNames: $subjectAltNames,
         requestedProfile: $requestedProfile,
-        requestedKeyAlgorithm: $requestedKeyAlgorithm,
-        requestedRsaKeyBits: (if $requestedKeyAlgorithm == "rsa" then ($requestedRsaKeyBits | tonumber) else null end),
         requestedDays: ($requestedDays | tonumber),
         csrFile: $csrFile
       }' > "$request_path"
@@ -151,8 +147,6 @@ let
         ${lib.escapeShellArg cfg.commonName} \
         ${lib.escapeShellArg sanSpec} \
         ${lib.escapeShellArg runtimeDefaults.client.profile} \
-        ${lib.escapeShellArg cfg.keyAlgorithm} \
-        ${lib.escapeShellArg (toString cfg.rsaKeyBits)} \
         "$request_generation_key_path"
     elif [ ! -f "$candidate_csr_path" ]; then
       printf '%s\n' "Client runtime state is missing request material; provide keySourcePath, csrSourcePath, or seed the runtime state first" >&2
@@ -233,27 +227,6 @@ in
       default = runtimeDefaults.client.subjectAltNames;
       description = ''
         Subject alternative names to embed in the runtime OpenVPN client certificate.
-      '';
-    };
-
-    keyAlgorithm = lib.mkOption {
-      type = lib.types.enum [
-        "rsa"
-        "ec-p256"
-        "ec-p384"
-      ];
-      default = runtimeDefaults.client.keyAlgorithm;
-      description = ''
-        Private key algorithm used when generating the runtime client CSR locally.
-      '';
-    };
-
-    rsaKeyBits = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = runtimeDefaults.client.rsaKeyBits;
-      description = ''
-        RSA modulus size used for locally generated runtime client keys when `keyAlgorithm` is
-        `rsa`.
       '';
     };
 

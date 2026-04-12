@@ -69,8 +69,6 @@ let
       --arg basename ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
       --arg commonName ${lib.escapeShellArg cfg.commonName} \
       --arg pathLen ${lib.escapeShellArg cfg.pathLen} \
-      --arg requestedKeyAlgorithm ${lib.escapeShellArg cfg.keyAlgorithm} \
-      --arg requestedRsaKeyBits ${lib.escapeShellArg (toString cfg.rsaKeyBits)} \
       --arg requestedDays ${lib.escapeShellArg runtimeDefaults.intermediate.days} \
       --arg csrFile "$(basename "$csr_path")" \
       '{
@@ -80,8 +78,6 @@ let
         basename: $basename,
         commonName: $commonName,
         pathLen: ($pathLen | tonumber),
-        requestedKeyAlgorithm: $requestedKeyAlgorithm,
-        requestedRsaKeyBits: (if $requestedKeyAlgorithm == "rsa" then ($requestedRsaKeyBits | tonumber) else null end),
         requestedDays: ($requestedDays | tonumber),
         csrFile: $csrFile
       }' > "$request_path"
@@ -136,8 +132,6 @@ let
         ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
         ${lib.escapeShellArg cfg.commonName} \
         ${lib.escapeShellArg cfg.pathLen} \
-        ${lib.escapeShellArg cfg.keyAlgorithm} \
-        ${lib.escapeShellArg (toString cfg.rsaKeyBits)} \
         "$request_generation_key_path"
     elif [ ! -f "$candidate_csr_path" ]; then
       printf '%s\n' "Intermediate runtime state is missing request material; provide keySourcePath, csrSourcePath, or seed the runtime state first" >&2
@@ -218,27 +212,6 @@ in
       default = runtimeDefaults.intermediate.pathLen;
       description = ''
         Path length constraint requested for the runtime intermediate CA certificate.
-      '';
-    };
-
-    keyAlgorithm = lib.mkOption {
-      type = lib.types.enum [
-        "rsa"
-        "ec-p256"
-        "ec-p384"
-      ];
-      default = runtimeDefaults.intermediate.keyAlgorithm;
-      description = ''
-        Private key algorithm used when generating the runtime intermediate CSR locally.
-      '';
-    };
-
-    rsaKeyBits = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = runtimeDefaults.intermediate.rsaKeyBits;
-      description = ''
-        RSA modulus size used for locally generated runtime intermediate keys when `keyAlgorithm`
-        is `rsa`.
       '';
     };
 

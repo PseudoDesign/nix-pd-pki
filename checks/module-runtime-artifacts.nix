@@ -42,9 +42,7 @@ let
       "client" \
       "client-01.pseudo.test" \
       "DNS:client-01.pseudo.test" \
-      "clientAuth" \
-      "rsa" \
-      "3072"
+      "clientAuth"
     rm -f "$out/client.key.pem"
   '';
 in

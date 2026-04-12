@@ -10,8 +10,6 @@ in
     serial = "7001";
     days = "3650";
     pathLen = "1";
-    keyAlgorithm = "rsa";
-    rsaKeyBits = 3072;
     stateDir = "${baseStateDir}/authorities/root";
   };
 
@@ -21,8 +19,6 @@ in
     serial = "7101";
     days = "1825";
     pathLen = "0";
-    keyAlgorithm = "rsa";
-    rsaKeyBits = 3072;
     stateDir = "${baseStateDir}/authorities/intermediate";
   };
 
@@ -32,8 +28,6 @@ in
     serial = "8101";
     days = "825";
     profile = "serverAuth";
-    keyAlgorithm = "rsa";
-    rsaKeyBits = 3072;
     stateDir = "${baseStateDir}/openvpn-server-leaf";
     subjectAltNames = [
       "DNS:vpn.pseudo.test"
@@ -48,8 +42,6 @@ in
     serial = "8201";
     days = "825";
     profile = "clientAuth";
-    keyAlgorithm = "rsa";
-    rsaKeyBits = 3072;
     stateDir = "${baseStateDir}/openvpn-client-leaf";
     subjectAltNames = [ "DNS:client-01.pseudo.test" ];
   };

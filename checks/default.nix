@@ -75,6 +75,12 @@ let
         touch "$out"
       '';
     }
+    {
+      name = "signing-tools-pkcs11";
+      value = import ./signing-tools-pkcs11.nix {
+        inherit pkgs packages;
+      };
+    }
   ];
 in
 # Aggregate the shared checks plus one imported check set per role.

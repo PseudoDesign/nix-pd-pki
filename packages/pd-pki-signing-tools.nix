@@ -4,6 +4,7 @@ pkgs.writeShellApplication {
   runtimeInputs = [
     pkgs.coreutils
     pkgs.jq
+    pkgs.libp11
     pkgs.openssl
     pkgs.util-linux
   ];
@@ -26,6 +27,78 @@ pkgs.writeShellApplication {
     require_dir() {
       local path="$1"
       [ -d "$path" ] || die "Required directory not found: $path"
+    }
+
+    file_uri_for_path() {
+      local path="$1"
+      jq -rn --arg value "$path" '$value | @uri' | sed 's#^#file:#'
+    }
+
+    pkcs11_uri_has_pin_directive() {
+      case "$1" in
+        *";pin-source="*|*";pin-value="*) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+
+    pkcs11_uri_with_pin_source() {
+      local issuer_key_uri="$1"
+      local pin_file="$2"
+      printf '%s;%s\n' "$issuer_key_uri" "pin-source=$(file_uri_for_path "$pin_file")"
+    }
+
+    prepare_signer_backend() {
+      local issuer_key="$1"
+      local issuer_key_uri="$2"
+      local pkcs11_module="$3"
+      local pkcs11_pin_file="$4"
+      local backend_var_name="$5"
+      local key_ref_var_name="$6"
+      local selected_backend=""
+      local selected_key_ref=""
+
+      if [ -n "$issuer_key" ] && [ -n "$issuer_key_uri" ]; then
+        die "--issuer-key cannot be combined with --issuer-key-uri"
+      fi
+      if [ -z "$issuer_key" ] && [ -z "$issuer_key_uri" ]; then
+        die "Either --issuer-key or --issuer-key-uri is required"
+      fi
+
+      if [ -n "$issuer_key" ]; then
+        [ -z "$pkcs11_module" ] || die "--pkcs11-module can only be used with --issuer-key-uri"
+        [ -z "$pkcs11_pin_file" ] || die "--pkcs11-pin-file can only be used with --issuer-key-uri"
+        require_file "$issuer_key"
+        unset PD_PKI_PKCS11_PROVIDER_DIR PD_PKI_PKCS11_MODULE_PATH || true
+        selected_backend="file"
+        selected_key_ref="$issuer_key"
+      else
+        case "$issuer_key_uri" in
+          pkcs11:*)
+            ;;
+          *)
+            die "--issuer-key-uri must use the pkcs11: URI scheme"
+            ;;
+        esac
+        [ -n "$pkcs11_module" ] || die "--pkcs11-module is required with --issuer-key-uri"
+        require_file "$pkcs11_module"
+        if [ -n "$pkcs11_pin_file" ]; then
+          require_file "$pkcs11_pin_file"
+        fi
+        if [ -n "$pkcs11_pin_file" ] && pkcs11_uri_has_pin_directive "$issuer_key_uri"; then
+          die "--pkcs11-pin-file cannot be combined with a pin already embedded in --issuer-key-uri"
+        fi
+        if [ -n "$pkcs11_pin_file" ]; then
+          selected_key_ref="$(pkcs11_uri_with_pin_source "$issuer_key_uri" "$pkcs11_pin_file")"
+        else
+          selected_key_ref="$issuer_key_uri"
+        fi
+        export PD_PKI_PKCS11_PROVIDER_DIR="${pkgs.libp11}/lib/ossl-module"
+        export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module"
+        selected_backend="pkcs11"
+      fi
+
+      printf -v "$backend_var_name" '%s' "$selected_backend"
+      printf -v "$key_ref_var_name" '%s' "$selected_key_ref"
     }
 
     certificate_basename_for_role() {
@@ -69,13 +142,32 @@ pkgs.writeShellApplication {
       [ "$csr_pubkey" = "$cert_pubkey" ]
     }
 
+    signer_public_key_pem() {
+      local signer_backend="$1"
+      local issuer_key_ref="$2"
+
+      case "$signer_backend" in
+        file)
+          openssl pkey -in "$issuer_key_ref" -pubout -outform pem
+          ;;
+        pkcs11)
+          openssl_with_signer_backend "$signer_backend" pkey -in "$issuer_key_ref" -pubout -outform pem 2>/dev/null |
+            sed -n '/^-----BEGIN PUBLIC KEY-----$/,$p'
+          ;;
+        *)
+          die "Unsupported signer backend for public key extraction: $signer_backend"
+          ;;
+      esac
+    }
+
     signer_matches_key() {
-      local issuer_key="$1"
-      local issuer_cert="$2"
+      local signer_backend="$1"
+      local issuer_key_ref="$2"
+      local issuer_cert="$3"
       local key_pubkey
       local cert_pubkey
 
-      key_pubkey="$(openssl pkey -in "$issuer_key" -pubout -outform pem)"
+      key_pubkey="$(signer_public_key_pem "$signer_backend" "$issuer_key_ref")"
       cert_pubkey="$(openssl x509 -in "$issuer_cert" -pubkey -noout | openssl pkey -pubin -outform pem)"
       [ "$key_pubkey" = "$cert_pubkey" ]
     }
@@ -784,9 +876,9 @@ pkgs.writeShellApplication {
       cat <<'EOF' >&2
 Usage:
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
-  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR --issuer-key PATH --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--approved-by ID] [--approval-ticket ID] [--approval-note TEXT] [--serial SERIAL | --signer-state-dir DIR]
+  pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR (--issuer-key PATH | --issuer-key-uri URI --pkcs11-module PATH [--pkcs11-pin-file PATH]) --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--approved-by ID] [--approval-ticket ID] [--approval-note TEXT] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
-  pd-pki-signing-tools generate-crl --signer-state-dir DIR --issuer-key PATH --issuer-cert PATH --out-dir DIR [--days DAYS]
+  pd-pki-signing-tools generate-crl --signer-state-dir DIR (--issuer-key PATH | --issuer-key-uri URI --pkcs11-module PATH [--pkcs11-pin-file PATH]) --issuer-cert PATH --out-dir DIR [--days DAYS]
   pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON] [--revoked-by ID] [--revocation-ticket ID] [--revocation-note TEXT]
 EOF
     }
@@ -860,6 +952,9 @@ EOF
       local request_dir=""
       local out_dir=""
       local issuer_key=""
+      local issuer_key_uri=""
+      local pkcs11_module=""
+      local pkcs11_pin_file=""
       local issuer_cert=""
       local issuer_chain=""
       local signer_state_dir=""
@@ -882,6 +977,18 @@ EOF
             ;;
           --issuer-key)
             issuer_key="$2"
+            shift 2
+            ;;
+          --issuer-key-uri)
+            issuer_key_uri="$2"
+            shift 2
+            ;;
+          --pkcs11-module)
+            pkcs11_module="$2"
+            shift 2
+            ;;
+          --pkcs11-pin-file)
+            pkcs11_pin_file="$2"
             shift 2
             ;;
           --issuer-cert)
@@ -928,7 +1035,6 @@ EOF
 
       [ -n "$request_dir" ] || die "--request-dir is required"
       [ -n "$out_dir" ] || die "--out-dir is required"
-      [ -n "$issuer_key" ] || die "--issuer-key is required"
       [ -n "$issuer_cert" ] || die "--issuer-cert is required"
       if [ -n "$signer_state_dir" ] && [ -n "$serial" ]; then
         die "--serial cannot be combined with --signer-state-dir"
@@ -944,13 +1050,10 @@ EOF
       fi
 
       require_dir "$request_dir"
-      require_file "$issuer_key"
       require_file "$issuer_cert"
       [ -z "$issuer_chain" ] || require_file "$issuer_chain"
       require_file "$request_dir/request.json"
       [ -z "$policy_file" ] || validate_policy_file "$policy_file"
-
-      signer_matches_key "$issuer_key" "$issuer_cert" || die "Issuer certificate does not match issuer private key"
 
       local request_file="$request_dir/request.json"
       local role
@@ -966,6 +1069,18 @@ EOF
       local approval_recorded_at=""
       local approval_json=""
       local crl_distribution_points=""
+      local signer_backend=""
+      local issuer_key_ref=""
+
+      prepare_signer_backend \
+        "$issuer_key" \
+        "$issuer_key_uri" \
+        "$pkcs11_module" \
+        "$pkcs11_pin_file" \
+        signer_backend \
+        issuer_key_ref
+
+      signer_matches_key "$signer_backend" "$issuer_key_ref" "$issuer_cert" || die "Issuer certificate does not match issuer signing key"
 
       role="$(jq -r '.roleId // empty' "$request_file")"
       basename="$(jq -r '.basename // empty' "$request_file")"
@@ -1030,7 +1145,8 @@ EOF
             "$path_len" \
             "$serial" \
             "$days" \
-            "$issuer_key" \
+            "$signer_backend" \
+            "$issuer_key_ref" \
             "$issuer_cert" \
             "$issuer_chain" \
             "$crl_distribution_points"
@@ -1050,7 +1166,8 @@ EOF
             "$requested_profile" \
             "$serial" \
             "$days" \
-            "$issuer_key" \
+            "$signer_backend" \
+            "$issuer_key_ref" \
             "$issuer_cert" \
             "$issuer_chain" \
             "$crl_distribution_points"
@@ -1193,6 +1310,9 @@ EOF
     generate_crl() {
       local signer_state_dir=""
       local issuer_key=""
+      local issuer_key_uri=""
+      local pkcs11_module=""
+      local pkcs11_pin_file=""
       local issuer_cert=""
       local out_dir=""
       local days="7"
@@ -1205,6 +1325,18 @@ EOF
             ;;
           --issuer-key)
             issuer_key="$2"
+            shift 2
+            ;;
+          --issuer-key-uri)
+            issuer_key_uri="$2"
+            shift 2
+            ;;
+          --pkcs11-module)
+            pkcs11_module="$2"
+            shift 2
+            ;;
+          --pkcs11-pin-file)
+            pkcs11_pin_file="$2"
             shift 2
             ;;
           --issuer-cert)
@@ -1226,13 +1358,10 @@ EOF
       done
 
       [ -n "$signer_state_dir" ] || die "--signer-state-dir is required"
-      [ -n "$issuer_key" ] || die "--issuer-key is required"
       [ -n "$issuer_cert" ] || die "--issuer-cert is required"
       [ -n "$out_dir" ] || die "--out-dir is required"
       require_dir "$signer_state_dir"
-      require_file "$issuer_key"
       require_file "$issuer_cert"
-      signer_matches_key "$issuer_key" "$issuer_cert" || die "Issuer certificate does not match issuer private key"
 
       local state_crl_path
       local state_crl_metadata_path
@@ -1241,6 +1370,18 @@ EOF
       local config_path
       local crl_number_seed
       local signer_lock_fd=""
+      local signer_backend=""
+      local issuer_key_ref=""
+
+      prepare_signer_backend \
+        "$issuer_key" \
+        "$issuer_key_uri" \
+        "$pkcs11_module" \
+        "$pkcs11_pin_file" \
+        signer_backend \
+        issuer_key_ref
+
+      signer_matches_key "$signer_backend" "$issuer_key_ref" "$issuer_cert" || die "Issuer certificate does not match issuer signing key"
 
       acquire_signer_state_lock "$signer_state_dir" signer_lock_fd
 
@@ -1266,7 +1407,7 @@ default_ca = crl_ca
 database = $crl_workdir/index.txt
 new_certs_dir = $crl_workdir/newcerts
 certificate = $issuer_cert
-private_key = $issuer_key
+private_key = $issuer_key_ref
 serial = $crl_workdir/serial
 crlnumber = $crl_workdir/crlnumber
 default_md = sha256
@@ -1307,7 +1448,7 @@ EOF
           cert_path="$issuance_dir/$basename.cert.pem"
           require_file "$cert_path"
           cp "$cert_path" "$crl_workdir/newcerts/$serial.pem"
-          openssl ca -config "$config_path" -batch -valid "$cert_path" >/dev/null 2>&1
+          openssl_with_signer_backend "$signer_backend" ca -config "$config_path" -batch -valid "$cert_path" >/dev/null 2>&1
         done
       fi
 
@@ -1333,11 +1474,11 @@ EOF
           [ -n "$basename" ] || die "Issuance record is missing request.basename: $issuance_record"
           cert_path="$issuance_dir/$basename.cert.pem"
           require_file "$cert_path"
-          openssl ca -config "$config_path" -batch -revoke "$cert_path" -crl_reason "$reason" >/dev/null 2>&1
+          openssl_with_signer_backend "$signer_backend" ca -config "$config_path" -batch -revoke "$cert_path" -crl_reason "$reason" >/dev/null 2>&1
         done
       fi
 
-      openssl ca -config "$config_path" -batch -gencrl -out "$state_crl_path" -crldays "$days" >/dev/null 2>&1
+      openssl_with_signer_backend "$signer_backend" ca -config "$config_path" -batch -gencrl -out "$state_crl_path" -crldays "$days" >/dev/null 2>&1
       chmod 644 "$state_crl_path"
       cp "$crl_workdir/crlnumber" "$state_next_crl_number_path"
       write_crl_metadata "$state_crl_metadata_path" "$state_crl_path" "$issuer_cert" "$signer_state_dir"

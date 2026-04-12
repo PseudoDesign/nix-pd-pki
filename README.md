@@ -269,6 +269,22 @@ pd-pki-signing-tools sign-request \
   --approved-by operator-vpn
 ```
 
+For a YubiKey or other PKCS#11-backed issuer key, use a `pkcs11:` URI plus the module path instead of `--issuer-key`:
+
+```bash
+pd-pki-signing-tools sign-request \
+  --request-dir /tmp/server-request \
+  --out-dir /tmp/server-signed \
+  --issuer-key-uri 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' \
+  --pkcs11-module /run/current-system/sw/lib/libykcs11.so \
+  --pkcs11-pin-file /secure/issuer/pin.txt \
+  --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
+  --issuer-chain /secure/issuer/chain.pem \
+  --signer-state-dir /secure/issuer/state/intermediate \
+  --policy-file /secure/issuer/policy/intermediate.json \
+  --approved-by operator-vpn
+```
+
 3. Back on the request node, import the signed bundle into runtime state:
 
 ```bash
@@ -371,6 +387,19 @@ pd-pki-signing-tools generate-crl \
   --days 30
 ```
 
+The same PKCS#11 options are available for CRL generation:
+
+```bash
+pd-pki-signing-tools generate-crl \
+  --signer-state-dir /secure/issuer/state/intermediate \
+  --issuer-key-uri 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' \
+  --pkcs11-module /run/current-system/sw/lib/libykcs11.so \
+  --pkcs11-pin-file /secure/issuer/pin.txt \
+  --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
+  --out-dir /tmp/intermediate-crl \
+  --days 30
+```
+
 That writes `crl.pem` and `metadata.json` into `--out-dir`, updates `<signer-state-dir>/crls/`, and lets deployment nodes stage the resulting CRL through `crlSourcePath`.
 
 Exported request bundles always include `request.json`, the canonical CSR filename for the role, and any role-specific manifest such as `san-manifest.json` or `identity-manifest.json`. Signed bundles contain the issued certificate, `chain.pem`, `metadata.json`, and a copy of the normalized `request.json`.
@@ -390,11 +419,12 @@ Run it with:
 nix run .#pd-pki-operator
 ```
 
-The first version is intentionally conservative:
+The current wizard supports both file-backed and token-backed signing flows:
 
 - in an interactive terminal it uses a full-screen `dialog` interface and live wait screens that refresh while USB media or a YubiKey is being inserted
-- signing still uses file-based issuer key paths and the existing `pd-pki-signing-tools sign-request` backend
-- YubiKey detection is informational only in this build; the wizard can show when a YubiKey is present, but it does not yet perform PKCS#11 or PIV-backed signing
+- operators can choose either a PEM issuer key path or a YubiKey / PKCS#11 signer backend for request signing and CRL generation
+- the PKCS#11 flow defaults to YubiKey PIV's `libykcs11.so`, can discover token certificate objects with `pkcs11-tool`, and always offers manual URI entry as a fallback
+- the wizard still prompts for a local issuer certificate and optional chain path so it can verify returned certificates and assemble bundles
 - removable-volume auto-detection uses `lsblk` when available and always offers a manual mounted-path fallback
 - `PD_PKI_OPERATOR_PLAIN=1` forces the original line-oriented prompt mode when desired
 

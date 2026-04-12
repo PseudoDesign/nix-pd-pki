@@ -109,6 +109,35 @@ install_candidate_artifact() {
   mv -f "$target_tmp" "$target_path"
 }
 
+openssl_with_signer_backend() {
+  local signer_backend="$1"
+  shift
+
+  case "$signer_backend" in
+    file)
+      openssl "$@"
+      ;;
+    pkcs11)
+      [ -n "${PD_PKI_PKCS11_PROVIDER_DIR:-}" ] || {
+        printf '%s\n' "PKCS#11 provider directory is not configured" >&2
+        return 1
+      }
+      [ -n "${PD_PKI_PKCS11_MODULE_PATH:-}" ] || {
+        printf '%s\n' "PKCS#11 module path is not configured" >&2
+        return 1
+      }
+      env \
+        OPENSSL_MODULES="$PD_PKI_PKCS11_PROVIDER_DIR" \
+        PKCS11_MODULE_PATH="$PD_PKI_PKCS11_MODULE_PATH" \
+        openssl "$@" -provider default -provider pkcs11prov
+      ;;
+    *)
+      printf '%s\n' "Unsupported signer backend: $signer_backend" >&2
+      return 1
+      ;;
+  esac
+}
+
 artifact_set_digest() {
   local path=""
 
@@ -949,10 +978,11 @@ sign_ca_request() {
   local pathlen="$4"
   local serial="$5"
   local days="$6"
-  local issuer_key="$7"
-  local issuer_cert="$8"
-  local issuer_chain="${9:-}"
-  local crl_distribution_points="${10:-}"
+  local signer_backend="$7"
+  local issuer_key_ref="$8"
+  local issuer_cert="$9"
+  local issuer_chain="${10:-}"
+  local crl_distribution_points="${11:-}"
 
   local cert_path="${artifacts_dir}/${basename}.cert.pem"
   local chain_path="${artifacts_dir}/chain.pem"
@@ -970,10 +1000,10 @@ EOF
     printf '%s\n' "crlDistributionPoints = ${crl_distribution_points}" >> "$ext_path"
   fi
 
-  openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
+  openssl_with_signer_backend "$signer_backend" x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \
     -CA "$issuer_cert" \
-    -CAkey "$issuer_key" \
+    -CAkey "$issuer_key_ref" \
     -extfile "$ext_path" \
     -extensions v3_intermediate_ca \
     -out "$cert_path"
@@ -988,10 +1018,11 @@ sign_tls_request() {
   local profile="$5"
   local serial="$6"
   local days="$7"
-  local issuer_key="$8"
-  local issuer_cert="$9"
-  local issuer_chain="${10:-}"
-  local crl_distribution_points="${11:-}"
+  local signer_backend="$8"
+  local issuer_key_ref="$9"
+  local issuer_cert="${10}"
+  local issuer_chain="${11:-}"
+  local crl_distribution_points="${12:-}"
 
   local cert_path="${artifacts_dir}/${basename}.cert.pem"
   local chain_path="${artifacts_dir}/chain.pem"
@@ -1011,10 +1042,10 @@ EOF
     printf '%s\n' "crlDistributionPoints = ${crl_distribution_points}" >> "$ext_path"
   fi
 
-  openssl x509 -req -sha256 -days "$days" -set_serial "$serial" \
+  openssl_with_signer_backend "$signer_backend" x509 -req -sha256 -days "$days" -set_serial "$serial" \
     -in "$csr_path" \
     -CA "$issuer_cert" \
-    -CAkey "$issuer_key" \
+    -CAkey "$issuer_key_ref" \
     -extfile "$ext_path" \
     -extensions tls_leaf \
     -out "$cert_path"

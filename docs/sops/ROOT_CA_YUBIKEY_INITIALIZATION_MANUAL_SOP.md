@@ -55,7 +55,7 @@ Before starting, gather the following.
 
 1. A dedicated YubiKey with PIV support
 2. An offline NixOS workstation with physical access control
-3. `pcscd` available and working on that workstation
+3. A workstation where `ykman list --serials` can detect the token
 4. The desired root subject string in OpenSSL slash format, for example:
    `/CN=Pseudo Design Root CA`
 5. The desired root validity period in days
@@ -95,13 +95,13 @@ nix shell \
 
 ### 1. Prepare The Workstation
 
-Confirm smart-card support is available:
+Confirm the YubiKey is detectable:
 
 ```bash
-systemctl is-active pcscd
+ykman list --serials
 ```
 
-If `pcscd` is not active, start or fix it before continuing.
+If the token is not listed, fix that before continuing.
 
 Create a working directory with restricted permissions:
 

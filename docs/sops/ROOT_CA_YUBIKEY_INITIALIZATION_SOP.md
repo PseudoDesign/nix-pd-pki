@@ -32,7 +32,8 @@ token. Use the manual fallback SOP for those cases.
 Before starting, gather the following.
 
 1. A dedicated YubiKey with PIV support
-2. An offline NixOS workstation with `pcscd` working
+2. An offline NixOS workstation where `ykman list --serials` can detect the
+   token
 3. `pd-pki-signing-tools` available in `PATH`, or a temporary shell that
    provides it
 4. The root initialization profile, normally:
@@ -62,13 +63,13 @@ Before starting, gather the following.
 
 ### 1. Prepare The Workstation
 
-Confirm smart-card support is available:
+Confirm the YubiKey is detectable:
 
 ```bash
-systemctl is-active pcscd
+ykman list --serials
 ```
 
-If `pcscd` is not active, fix that before continuing.
+If the token is not listed, fix that before continuing.
 
 If `pd-pki-signing-tools` is not already available, open a temporary shell from
 the repo:

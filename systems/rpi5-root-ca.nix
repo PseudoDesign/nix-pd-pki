@@ -4,6 +4,9 @@ let
   pdPkiPackages = import ../packages {
     inherit pkgs definitions;
   };
+  operatorHome = "/home/operator";
+  operatorSecretsDirectory = "${operatorHome}/secrets";
+  rootYubiKeyProfilePath = "/etc/pd-pki/root-yubikey-init-profile.json";
   # Keep the radio stacks unavailable even if userspace packages or services
   # are reintroduced later.
   disabledRadioKernelModules = [
@@ -88,6 +91,16 @@ in
     "flakes"
   ];
 
+  environment.shellInit = ''
+    if [ "''${USER:-}" = operator ] && [ "''${HOME:-}" = ${lib.escapeShellArg operatorHome} ]; then
+      umask 077
+      export PROFILE=${lib.escapeShellArg rootYubiKeyProfilePath}
+      export PIN_FILE="$HOME/secrets/root-pin.txt"
+      export PUK_FILE="$HOME/secrets/root-puk.txt"
+      export MANAGEMENT_KEY_FILE="$HOME/secrets/root-management-key.txt"
+    fi
+  '';
+
   environment.systemPackages = [
     pdPkiPackages.pd-pki-operator
     pdPkiPackages.pd-pki-signing-tools
@@ -105,7 +118,14 @@ in
     Pseudo Design offline root CA workstation
 
     Root YubiKey profile:
-      /etc/pd-pki/root-yubikey-init-profile.json
+      ${rootYubiKeyProfilePath}
+
+    Operator shell defaults:
+      umask 077
+      PROFILE=${rootYubiKeyProfilePath}
+      PIN_FILE=${operatorSecretsDirectory}/root-pin.txt
+      PUK_FILE=${operatorSecretsDirectory}/root-puk.txt
+      MANAGEMENT_KEY_FILE=${operatorSecretsDirectory}/root-management-key.txt
 
     Suggested ceremony flow:
       1. Review the exported profile JSON

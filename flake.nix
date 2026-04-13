@@ -2,7 +2,7 @@
   description = "PKI Infrastructure for Pseudo Design";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/25.11";
     nixos-raspberrypi = {
       url = "github:nvmd/nixos-raspberrypi/main";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -65,7 +65,7 @@
           };
         in
         localPackages
-        // nixpkgs.lib.optionalAttrs (pkgs.system == "aarch64-linux") {
+        // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
           rpi5-root-ca-sd-image = rpi5RootCa.config.system.build.sdImage;
         }
       );

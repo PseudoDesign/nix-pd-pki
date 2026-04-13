@@ -52,6 +52,20 @@ An offline Raspberry Pi image receives:
 Before signing, the appliance verifies that the inserted token presents the
 expected root CA identity from the committed inventory.
 
+The intended signer-side verification step is:
+
+```bash
+pd-pki-signing-tools verify-root-yubikey-identity \
+  --inventory-dir /home/operator/inventory/root-ca/<root-id> \
+  --yubikey-serial <serial> \
+  --pin-file /home/operator/secrets/root-pin.txt \
+  --work-dir /home/operator/verify-root-yubikey
+```
+
+This command writes `root-yubikey-identity-summary.json` into the chosen
+working directory. A serial mismatch is recorded as audit metadata, but the
+certificate and verified public key remain the trust anchor.
+
 The appliance then signs the intermediate request bundle and exports the signed
 result back to removable media.
 

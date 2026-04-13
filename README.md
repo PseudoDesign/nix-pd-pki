@@ -313,6 +313,23 @@ pd-pki-signing-tools normalize-root-inventory \
   --inventory-root ./inventory/root-ca
 ```
 
+On the signing appliance, `pd-pki-signing-tools verify-root-yubikey-identity`
+can verify that the inserted token presents the committed root CA identity
+before an intermediate signing ceremony begins:
+
+```bash
+pd-pki-signing-tools verify-root-yubikey-identity \
+  --inventory-dir /home/operator/inventory/root-ca/<root-id> \
+  --yubikey-serial <serial> \
+  --pin-file /home/operator/secrets/root-pin.txt \
+  --work-dir /home/operator/verify-root-yubikey
+```
+
+The resulting `root-yubikey-identity-summary.json` records whether the inserted
+token's certificate and verified public key match the committed inventory.
+Serial mismatches are reported for audit purposes, but they are not the primary
+trust check.
+
 Build it with:
 
 ```bash

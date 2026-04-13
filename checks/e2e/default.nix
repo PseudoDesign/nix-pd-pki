@@ -187,137 +187,197 @@ listToAttrs [
       workdir="$(mktemp -d)"
       trap 'rm -rf "$workdir"' EXIT
 
-      write_inventory_manifest() {
-        local inventory_dir="$1"
-        local inventory_serial="$2"
-        local verified_pub_sha256
-
-        verified_pub_sha256="$(sha256sum "$inventory_dir/root-ca.pub.verified.pem" | cut -d' ' -f1)"
-
-        jq -n \
-          --arg rootId "$(printf '%s' "$(certificate_fingerprint "$inventory_dir/root-ca.cert.pem")" | tr -d ':' | tr '[:upper:]' '[:lower:]')" \
-          --arg serial "$inventory_serial" \
-          --arg slot "9c" \
-          --arg routineKeyUri "pkcs11:token=YubiKey%20PIV;id=%02;type=private" \
-          --arg certificatePath "root-ca.cert.pem" \
-          --arg subject "$(certificate_subject "$inventory_dir/root-ca.cert.pem")" \
-          --arg certificateSerial "$(certificate_serial "$inventory_dir/root-ca.cert.pem")" \
-          --arg certificateFingerprint "$(certificate_fingerprint "$inventory_dir/root-ca.cert.pem")" \
-          --arg notBefore "$(certificate_not_before "$inventory_dir/root-ca.cert.pem")" \
-          --arg notAfter "$(certificate_not_after "$inventory_dir/root-ca.cert.pem")" \
-          --arg verifiedPublicKeyPath "root-ca.pub.verified.pem" \
-          --arg verifiedPublicKeySha256 "$verified_pub_sha256" \
-          --arg attestationPath "root-ca.attestation.cert.pem" \
-          --arg attestationFingerprint "$(certificate_fingerprint "$inventory_dir/root-ca.attestation.cert.pem")" \
-          '{
-            schemaVersion: 1,
-            contractKind: "root-ca-inventory",
-            rootId: $rootId,
-            source: {
-              command: "init-root-yubikey",
-              profileKind: "root-yubikey-initialization"
-            },
-            yubiKey: {
-              serial: $serial,
-              slot: $slot,
-              routineKeyUri: $routineKeyUri
-            },
-            certificate: {
-              path: $certificatePath,
-              subject: $subject,
-              serial: $certificateSerial,
-              sha256Fingerprint: $certificateFingerprint,
-              notBefore: $notBefore,
-              notAfter: $notAfter
-            },
-            verifiedPublicKey: {
-              path: $verifiedPublicKeyPath,
-              sha256: $verifiedPublicKeySha256
-            },
-            attestation: {
-              path: $attestationPath,
-              sha256Fingerprint: $attestationFingerprint
-            },
-            metadata: {
-              path: "root-ca.metadata.json",
-              profile: "root-ca-yubikey-initialized"
-            },
-            ceremony: {
-              summaryPath: "root-yubikey-init-summary.json"
-            }
-          }' > "$inventory_dir/manifest.json"
-      }
-
-      verify_root_identity() {
-        local inventory_dir="$1"
-        local token_cert="$2"
-        local token_pub="$3"
-        local expected_fingerprint
-        local actual_fingerprint
-        local expected_pub_sha256
-        local actual_pub_sha256
-
-        expected_fingerprint="$(jq -r '.certificate.sha256Fingerprint' "$inventory_dir/manifest.json")"
-        actual_fingerprint="$(certificate_fingerprint "$token_cert")"
-        [ "$expected_fingerprint" = "$actual_fingerprint" ] || return 1
-
-        expected_pub_sha256="$(sha256sum "$inventory_dir/root-ca.pub.verified.pem" | cut -d' ' -f1)"
-        actual_pub_sha256="$(sha256sum "$token_pub" | cut -d' ' -f1)"
-        [ "$expected_pub_sha256" = "$actual_pub_sha256" ] || return 1
-      }
-
-      inventory_dir="$workdir/inventory"
-      token_good_dir="$workdir/token-good"
-      token_bad_dir="$workdir/token-bad"
+      bundle_dir="$workdir/root-bundle"
+      inventory_root="$workdir/inventory/root-ca"
       root_fixture="$workdir/root"
       bad_fixture="$workdir/bad-root"
       attestation_fixture="$workdir/attestation"
+      verify_good_dir="$workdir/verify-good"
+      verify_bad_dir="$workdir/verify-bad"
+      verify_audit_dir="$workdir/verify-audit"
 
-      mkdir -p "$inventory_dir" "$token_good_dir" "$token_bad_dir"
       generate_self_signed_ca "$root_fixture" "root-ca" "Pseudo Design Workflow Root CA" 9001 7300 1 ec-p384
       generate_self_signed_ca "$bad_fixture" "replacement-root-ca" "Pseudo Design Replacement Root CA" 9002 7300 1 ec-p384
       generate_self_signed_ca "$attestation_fixture" "root-attestation" "Pseudo Design Root Attestation" 7001 3650 0 ec-p384
 
-      cp "$root_fixture/root-ca.cert.pem" "$inventory_dir/root-ca.cert.pem"
-      openssl pkey -in "$root_fixture/root-ca.key.pem" -pubout -outform pem > "$inventory_dir/root-ca.pub.verified.pem"
-      cp "$attestation_fixture/root-attestation.cert.pem" "$inventory_dir/root-ca.attestation.cert.pem"
-      write_certificate_metadata "$inventory_dir/root-ca.cert.pem" "$inventory_dir/root-ca.metadata.json" "root-ca-yubikey-initialized"
+      mkdir -p "$bundle_dir"
+      cp "$root_fixture/root-ca.cert.pem" "$bundle_dir/root-ca.cert.pem"
+      openssl pkey -in "$root_fixture/root-ca.key.pem" -pubout -outform pem > "$bundle_dir/root-ca.pub.verified.pem"
+      cp "$attestation_fixture/root-attestation.cert.pem" "$bundle_dir/root-ca.attestation.cert.pem"
+      write_certificate_metadata "$bundle_dir/root-ca.cert.pem" "$bundle_dir/root-ca.metadata.json" "root-ca-yubikey-initialized"
+
+      fingerprint="$(certificate_fingerprint "$bundle_dir/root-ca.cert.pem")"
+      root_id="$(printf '%s' "$fingerprint" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+      printf '%s\n' 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' > "$bundle_dir/root-key-uri.txt"
       jq -n \
-        --arg fingerprint "$(certificate_fingerprint "$inventory_dir/root-ca.cert.pem")" \
-        --arg attestationFingerprint "$(certificate_fingerprint "$inventory_dir/root-ca.attestation.cert.pem")" \
+        --arg completedAt "2026-04-13T00:00:00Z" \
+        --arg yubikeySerial "42424242" \
+        --arg slot "9c" \
+        --arg routineKeyUri "$(cat "$bundle_dir/root-key-uri.txt")" \
+        --arg certificateInstallPath "/var/lib/pd-pki/authorities/root/root-ca.cert.pem" \
+        --arg archiveDirectory "/var/lib/pd-pki/yubikey-inventory/root-42424242" \
+        --arg profilePath "/etc/pd-pki/root-yubikey-init-profile.json" \
+        --arg reviewedPlanPath "/var/lib/pd-pki/yubikey-inventory/root-42424242/root-yubikey-init-plan.json" \
+        --arg reviewedPlanSha256 "deadbeef" \
+        --arg subject "$(certificate_subject "$bundle_dir/root-ca.cert.pem")" \
+        --arg serial "$(certificate_serial "$bundle_dir/root-ca.cert.pem")" \
+        --arg fingerprint "$fingerprint" \
+        --arg notBefore "$(certificate_not_before "$bundle_dir/root-ca.cert.pem")" \
+        --arg notAfter "$(certificate_not_after "$bundle_dir/root-ca.cert.pem")" \
+        --arg attestationFingerprint "$(certificate_fingerprint "$bundle_dir/root-ca.attestation.cert.pem")" \
         '{
           schemaVersion: 1,
           command: "init-root-yubikey",
+          completedAt: $completedAt,
+          yubikeySerial: $yubikeySerial,
+          forceResetApplied: true,
+          slot: $slot,
+          routineKeyUri: $routineKeyUri,
+          profilePath: $profilePath,
+          reviewedPlan: {
+            path: $reviewedPlanPath,
+            sha256: $reviewedPlanSha256
+          },
+          certificateInstallPath: $certificateInstallPath,
+          archiveDirectory: $archiveDirectory,
           certificate: {
-            sha256Fingerprint: $fingerprint
+            subject: $subject,
+            serial: $serial,
+            sha256Fingerprint: $fingerprint,
+            notBefore: $notBefore,
+            notAfter: $notAfter
           },
           attestation: {
             sha256Fingerprint: $attestationFingerprint
           }
-        }' > "$inventory_dir/root-yubikey-init-summary.json"
-      printf '%s\n' 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' > "$inventory_dir/root-key-uri.txt"
-      write_inventory_manifest "$inventory_dir" "42424242"
+        }' > "$bundle_dir/root-yubikey-init-summary.json"
 
-      cp "$inventory_dir/root-ca.cert.pem" "$token_good_dir/token.cert.pem"
-      cp "$inventory_dir/root-ca.pub.verified.pem" "$token_good_dir/token.pub.pem"
+      pd-pki-signing-tools normalize-root-inventory \
+        --source-dir "$bundle_dir" \
+        --inventory-root "$inventory_root"
 
-      if ! verify_root_identity "$inventory_dir" "$token_good_dir/token.cert.pem" "$token_good_dir/token.pub.pem"; then
-        printf '%s\n' "[e2e-root-yubikey-identity-verification] expected matching certificate and public key to verify" >&2
-        exit 1
-      fi
+      inventory_dir="$inventory_root/$root_id"
+      pin_file="$workdir/root-pin.txt"
+      fake_ykman="$workdir/fake-ykman"
+      bad_public_key_path="$bad_fixture/replacement-root-ca.pub.verified.pem"
 
-      cp "$bad_fixture/replacement-root-ca.cert.pem" "$token_bad_dir/token.cert.pem"
-      openssl pkey -in "$bad_fixture/replacement-root-ca.key.pem" -pubout -outform pem > "$token_bad_dir/token.pub.pem"
-      if verify_root_identity "$inventory_dir" "$token_bad_dir/token.cert.pem" "$token_bad_dir/token.pub.pem"; then
+      printf '%s\n' '12345678' > "$pin_file"
+      chmod 600 "$pin_file"
+      openssl pkey -in "$bad_fixture/replacement-root-ca.key.pem" -pubout -outform pem > "$bad_public_key_path"
+
+      cat > "$fake_ykman" <<'EOF'
+#!${pkgs.bash}/bin/bash
+set -euo pipefail
+
+serial=""
+if [ "''${1:-}" = "--device" ]; then
+  serial="''${2:-}"
+  shift 2
+fi
+
+case "''${1:-}" in
+  info)
+    printf '%s\n' "Device type: YubiKey 5"
+    printf 'Serial number: %s\n' "$serial"
+    ;;
+  piv)
+    shift
+    case "''${1:-}" in
+      info)
+        printf '%s\n' "PIV version: 5.7.0"
+        printf '%s\n' "PIN tries remaining: 3/3"
+        printf '%s\n' "Slot 9C: X.509 Certificate"
+        ;;
+      certificates)
+        [ "''${2:-}" = "export" ] || exit 64
+        cp "$PD_PKI_FAKE_YKMAN_CERT" "''${4:-}"
+        ;;
+      keys)
+        [ "''${2:-}" = "export" ] || exit 64
+        destination="''${4:-}"
+        shift 4
+        verify=0
+        pin=""
+        while [ "''${#}" -gt 0 ]; do
+          case "$1" in
+            --verify)
+              verify=1
+              shift
+              ;;
+            --pin)
+              pin="''${2:-}"
+              shift 2
+              ;;
+            *)
+              exit 64
+              ;;
+          esac
+        done
+        [ "$verify" = "1" ] || exit 64
+        [ "$pin" = "$PD_PKI_FAKE_YKMAN_PIN" ] || exit 1
+        cp "$PD_PKI_FAKE_YKMAN_PUB" "$destination"
+        ;;
+      *)
+        exit 64
+        ;;
+    esac
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+EOF
+      chmod 755 "$fake_ykman"
+
+      env \
+        PD_PKI_YKMAN_BIN="$fake_ykman" \
+        PD_PKI_FAKE_YKMAN_CERT="$inventory_dir/root-ca.cert.pem" \
+        PD_PKI_FAKE_YKMAN_PUB="$inventory_dir/root-ca.pub.verified.pem" \
+        PD_PKI_FAKE_YKMAN_PIN="12345678" \
+        pd-pki-signing-tools verify-root-yubikey-identity \
+          --inventory-dir "$inventory_dir" \
+          --yubikey-serial 42424242 \
+          --pin-file "$pin_file" \
+          --work-dir "$verify_good_dir"
+
+      test -f "$verify_good_dir/root-yubikey-identity-summary.json"
+      jq -r '.rootId' "$verify_good_dir/root-yubikey-identity-summary.json" | grep -Fx "$root_id"
+      jq -r '.certificate.match' "$verify_good_dir/root-yubikey-identity-summary.json" | grep -Fx 'true'
+      jq -r '.verifiedPublicKey.match' "$verify_good_dir/root-yubikey-identity-summary.json" | grep -Fx 'true'
+      jq -r '.serialMatches' "$verify_good_dir/root-yubikey-identity-summary.json" | grep -Fx 'true'
+
+      if env \
+        PD_PKI_YKMAN_BIN="$fake_ykman" \
+        PD_PKI_FAKE_YKMAN_CERT="$bad_fixture/replacement-root-ca.cert.pem" \
+        PD_PKI_FAKE_YKMAN_PUB="$bad_public_key_path" \
+        PD_PKI_FAKE_YKMAN_PIN="12345678" \
+        pd-pki-signing-tools verify-root-yubikey-identity \
+          --inventory-dir "$inventory_dir" \
+          --yubikey-serial 42424242 \
+          --pin-file "$pin_file" \
+          --work-dir "$verify_bad_dir"; then
         printf '%s\n' "[e2e-root-yubikey-identity-verification] expected mismatched certificate and public key to fail verification" >&2
         exit 1
       fi
 
-      write_inventory_manifest "$inventory_dir" "99999999"
-      if ! verify_root_identity "$inventory_dir" "$token_good_dir/token.cert.pem" "$token_good_dir/token.pub.pem"; then
-        printf '%s\n' "[e2e-root-yubikey-identity-verification] expected serial-only changes to remain audit-only metadata" >&2
-        exit 1
-      fi
+      test -f "$verify_bad_dir/root-yubikey-identity-summary.json"
+      jq -e '.certificate.match == false and .verifiedPublicKey.match == false' "$verify_bad_dir/root-yubikey-identity-summary.json" >/dev/null
+
+      env \
+        PD_PKI_YKMAN_BIN="$fake_ykman" \
+        PD_PKI_FAKE_YKMAN_CERT="$inventory_dir/root-ca.cert.pem" \
+        PD_PKI_FAKE_YKMAN_PUB="$inventory_dir/root-ca.pub.verified.pem" \
+        PD_PKI_FAKE_YKMAN_PIN="12345678" \
+        pd-pki-signing-tools verify-root-yubikey-identity \
+          --inventory-dir "$inventory_dir" \
+          --yubikey-serial 99999999 \
+          --pin-file "$pin_file" \
+          --work-dir "$verify_audit_dir"
+
+      jq -r '.certificate.match' "$verify_audit_dir/root-yubikey-identity-summary.json" | grep -Fx 'true'
+      jq -r '.verifiedPublicKey.match' "$verify_audit_dir/root-yubikey-identity-summary.json" | grep -Fx 'true'
+      jq -r '.serialMatches' "$verify_audit_dir/root-yubikey-identity-summary.json" | grep -Fx 'false'
 
       grep -F 'The primary trust anchor is the root CA certificate and public key' ${contractDoc}
 

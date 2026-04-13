@@ -30,7 +30,7 @@ in
     Suggested ceremony flow:
       1. Confirm the committed root inventory has been copied onto the workstation
       2. Mount the removable media carrying the intermediate request bundle
-      3. Verify the inserted token against the committed root inventory
+      3. Run pd-pki-signing-tools verify-root-yubikey-identity --inventory-dir "$ROOT_INVENTORY_ROOT"/<root-id> --yubikey-serial <serial> --pin-file "$PIN_FILE" --work-dir "$HOME/verify-root-yubikey"
       4. Run pd-pki-signing-tools sign-request with the root CA YubiKey backend
       5. Export the signed intermediate bundle back to removable media
 

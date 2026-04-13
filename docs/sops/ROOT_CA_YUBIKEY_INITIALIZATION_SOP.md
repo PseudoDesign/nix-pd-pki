@@ -83,18 +83,22 @@ the repo:
 nix shell .#pd-pki-signing-tools
 ```
 
+On the provisioner image, switch into the `operator` shell first. That shell
+already exports `PROFILE`, `PIN_FILE`, `PUK_FILE`, and
+`MANAGEMENT_KEY_FILE`, so there is no need to re-confirm or redefine them
+before starting the ceremony.
+
 Create a restricted working directory:
 
 ```bash
 umask 077
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
-PROFILE='/etc/pd-pki/root-yubikey-init-profile.json'
 YK_SERIAL='<serial>'
-PIN_FILE='/secure/root-pin.txt'
-PUK_FILE='/secure/root-puk.txt'
-MANAGEMENT_KEY_FILE='/secure/root-management-key.txt'
 ```
+
+If you are running outside the appliance shell, set those paths explicitly
+before continuing.
 
 ### 2. Review The Declarative Root Profile
 

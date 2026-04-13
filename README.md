@@ -177,7 +177,7 @@ Operational defaults for this appliance:
 
 - boots into a headless offline root CA workstation profile
 - enables `pcscd` and preinstalls `pd-pki-signing-tools`, `pd-pki-operator`,
-  `openssl`, `jq`, `libp11`, `opensc`, `yubico-piv-tool`, and
+  `openssl`, `jq`, `libp11`, `pkcs11-provider`, `opensc`, `yubico-piv-tool`, and
   `yubikey-manager`
 - exports `/etc/pd-pki/root-yubikey-init-profile.json` for the root YubiKey
   ceremony

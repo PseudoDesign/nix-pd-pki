@@ -8,9 +8,9 @@ let
       "${pkgs.yubico-piv-tool}/lib/libykcs11.so";
   rootPkcs11ProviderDirectory =
     if pkgs == null then
-      "/run/current-system/sw/lib/ossl-module"
+      "/run/current-system/sw/lib/ossl-modules"
     else
-      "${pkgs.libp11}/lib/ossl-module";
+      "${pkgs.pkcs11-provider}/lib/ossl-modules";
 in
 {
   inherit baseStateDir;

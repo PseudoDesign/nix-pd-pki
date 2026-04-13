@@ -75,7 +75,7 @@ temporary shell:
 nix shell \
   nixpkgs#yubikey-manager \
   nixpkgs#yubico-piv-tool \
-  nixpkgs#libp11 \
+  nixpkgs#pkcs11-provider \
   nixpkgs#openssl \
   nixpkgs#opensc
 ```
@@ -301,7 +301,7 @@ openssl x509 -in "$WORKDIR/root-ca.attestation.cert.pem" -noout -fingerprint -sh
 Set the PKCS#11 provider locations expected on the NixOS workstation:
 
 ```bash
-export OPENSSL_MODULES='/run/current-system/sw/lib/ossl-module'
+export OPENSSL_MODULES='/run/current-system/sw/lib/ossl-modules'
 export PKCS11_MODULE_PATH='/run/current-system/sw/lib/libykcs11.so'
 ```
 

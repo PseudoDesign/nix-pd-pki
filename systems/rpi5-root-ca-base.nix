@@ -117,6 +117,7 @@ in
     pkgs.libp11
     pkgs.opensc
     pkgs.openssl
+    pkgs.pkcs11-provider
     pkgs.tmux
     pkgs.tree
     pkgs.yubico-piv-tool

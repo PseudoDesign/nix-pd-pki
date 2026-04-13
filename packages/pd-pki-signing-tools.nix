@@ -117,7 +117,7 @@ pkgs.writeShellApplication {
         else
           selected_key_ref="$issuer_key_uri"
         fi
-        export PD_PKI_PKCS11_PROVIDER_DIR="${pkgs.libp11}/lib/ossl-module"
+        export PD_PKI_PKCS11_PROVIDER_DIR="${pkgs.pkcs11-provider}/lib/ossl-modules"
         export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module"
         selected_backend="pkcs11"
       fi
@@ -301,6 +301,8 @@ EOF
       root_yubikey_slot_object_id "$slot" >/dev/null
       require_absolute_path "$pkcs11_module_path" "Profile pkcs11ModulePath"
       require_absolute_path "$pkcs11_provider_directory" "Profile pkcs11ProviderDirectory"
+      require_file "$pkcs11_module_path"
+      require_dir "$pkcs11_provider_directory"
       require_absolute_path "$certificate_install_path" "Profile certificateInstallPath"
       require_absolute_path "$archive_base_directory" "Profile archiveBaseDirectory"
     }

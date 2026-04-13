@@ -107,10 +107,12 @@ in
     pdPkiPackages.root-certificate-authority
     pkgs.git
     pkgs.jq
+    pkgs.libp11
     pkgs.opensc
     pkgs.openssl
     pkgs.tmux
     pkgs.tree
+    pkgs.yubico-piv-tool
     pkgs.yubikey-manager
   ];
 

@@ -1,5 +1,16 @@
+{ pkgs ? null }:
 let
   baseStateDir = "/var/lib/pd-pki";
+  rootPkcs11ModulePath =
+    if pkgs == null then
+      "/run/current-system/sw/lib/libykcs11.so"
+    else
+      "${pkgs.yubico-piv-tool}/lib/libykcs11.so";
+  rootPkcs11ProviderDirectory =
+    if pkgs == null then
+      "/run/current-system/sw/lib/ossl-module"
+    else
+      "${pkgs.libp11}/lib/ossl-module";
 in
 {
   inherit baseStateDir;
@@ -15,8 +26,8 @@ in
     algorithm = "ECCP384";
     pinPolicy = "always";
     touchPolicy = "always";
-    pkcs11ModulePath = "/run/current-system/sw/lib/libykcs11.so";
-    pkcs11ProviderDirectory = "/run/current-system/sw/lib/ossl-module";
+    pkcs11ModulePath = rootPkcs11ModulePath;
+    pkcs11ProviderDirectory = rootPkcs11ProviderDirectory;
     archiveBaseDirectory = "${baseStateDir}/yubikey-inventory";
     stateDir = "${baseStateDir}/authorities/root";
   };

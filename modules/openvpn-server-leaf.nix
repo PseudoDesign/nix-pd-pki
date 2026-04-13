@@ -1,6 +1,6 @@
 { config, lib, pkgs, ... }:
 let
-  runtimeDefaults = import ./runtime-defaults.nix;
+  runtimeDefaults = import ./runtime-defaults.nix { inherit pkgs; };
   roleModule = import ./mk-role-module.nix {
     roleId = "openvpn-server-leaf";
     optionName = "openvpnServerLeaf";

@@ -223,6 +223,8 @@ if pkgs.stdenv.hostPlatform.isLinux then
         root_empty.succeed("jq -r '.profileKind' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx 'root-yubikey-initialization'")
         root_empty.succeed("jq -r '.subject' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '/CN=Pseudo Design Configured Root CA'")
         root_empty.succeed("jq -r '.validityDays' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '7300'")
+        root_empty.succeed("test -f \"$(jq -r '.pkcs11ModulePath' /etc/pd-pki/root-yubikey-init-profile.json)\"")
+        root_empty.succeed("test -d \"$(jq -r '.pkcs11ProviderDirectory' /etc/pd-pki/root-yubikey-init-profile.json)\"")
         root_empty.succeed("jq -r '.certificateInstallPath' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '/var/lib/pd-pki/authorities/root/root-ca.cert.pem'")
         root_empty.succeed("jq -r '.archiveBaseDirectory' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '/var/lib/pd-pki/custom-yubikey-inventory'")
 
@@ -236,6 +238,8 @@ if pkgs.stdenv.hostPlatform.isLinux then
         root_imported.succeed("jq -r '.validityDays' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '3650'")
         root_imported.succeed("jq -r '.slot' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '9c'")
         root_imported.succeed("jq -r '.algorithm' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx 'ECCP384'")
+        root_imported.succeed("test -f \"$(jq -r '.pkcs11ModulePath' /etc/pd-pki/root-yubikey-init-profile.json)\"")
+        root_imported.succeed("test -d \"$(jq -r '.pkcs11ProviderDirectory' /etc/pd-pki/root-yubikey-init-profile.json)\"")
         root_imported.succeed("test \"$(stat -c %a /var/lib/pd-pki/authorities/root/root-ca.key.pem)\" = 600")
         root_imported.succeed("case \"$(readlink -f /var/lib/pd-pki/authorities/root/root-ca.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
         root_imported.succeed("openssl x509 -in /var/lib/pd-pki/authorities/root/root-ca.cert.pem -noout >/dev/null")

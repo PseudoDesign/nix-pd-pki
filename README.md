@@ -100,6 +100,8 @@ The flake exports the following top-level outputs:
   - `pd-pki-signing-tools`
   - `pd-pki-operator`
   - `rpi5-root-ca-sd-image` on `aarch64-linux`
+  - `rpi5-root-yubikey-provisioner-sd-image` on `aarch64-linux`
+  - `rpi5-root-intermediate-signer-sd-image` on `aarch64-linux`
   - one package per role
   - one package per workflow step, named `<role-id>-<step-id>`
 - `checks`
@@ -117,6 +119,8 @@ The flake exports the following top-level outputs:
   - `openvpn-client-leaf`
 - `nixosConfigurations`
   - `rpi5-root-ca`
+  - `rpi5-root-yubikey-provisioner`
+  - `rpi5-root-intermediate-signer`
 - `apps.test-report`
 - `apps.pd-pki-operator`
 - `lib`
@@ -137,18 +141,34 @@ The heavier NixOS VM tests run only on Linux hosts.
 
 ## Raspberry Pi 5 Image
 
-The flake exports a dedicated Raspberry Pi 5 root CA appliance configuration at
-`nixosConfigurations.rpi5-root-ca` plus a convenience SD image package at
-`packages.aarch64-linux.rpi5-root-ca-sd-image`.
+The flake exports dedicated Raspberry Pi 5 root CA appliance configurations at:
+
+- `nixosConfigurations.rpi5-root-yubikey-provisioner`
+- `nixosConfigurations.rpi5-root-intermediate-signer`
+
+plus convenience SD image packages at:
+
+- `packages.aarch64-linux.rpi5-root-yubikey-provisioner-sd-image`
+- `packages.aarch64-linux.rpi5-root-intermediate-signer-sd-image`
+
+For compatibility, `nixosConfigurations.rpi5-root-ca` and
+`packages.aarch64-linux.rpi5-root-ca-sd-image` currently alias the
+provisioning image.
 
 It combines the `pd-pki` root CA module with
 [`nixos-raspberrypi`](https://github.com/nvmd/nixos-raspberrypi) for Raspberry
 Pi 5 bootloader, firmware, kernel, and SD image support.
 
-Build the SD image with:
+Build the provisioning SD image with:
 
 ```bash
-nix build .#packages.aarch64-linux.rpi5-root-ca-sd-image
+nix build .#packages.aarch64-linux.rpi5-root-yubikey-provisioner-sd-image
+```
+
+Build the intermediate-signing SD image with:
+
+```bash
+nix build .#packages.aarch64-linux.rpi5-root-intermediate-signer-sd-image
 ```
 
 The resulting compressed image will be under `result/sd-image/`.

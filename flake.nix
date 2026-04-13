@@ -51,14 +51,25 @@
       forAllSystems = f:
         nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
 
-      rpi5RootCa = nixos-raspberrypi.lib.nixosSystem {
+      rpi5RootYubiKeyProvisioner = nixos-raspberrypi.lib.nixosSystem {
         inherit nixpkgs;
         trustCaches = false;
         specialArgs = inputs // {
           inherit definitions nixosModules;
         };
-        modules = [ ./systems/rpi5-root-ca.nix ];
+        modules = [ ./systems/rpi5-root-yubikey-provisioner.nix ];
       };
+
+      rpi5RootIntermediateSigner = nixos-raspberrypi.lib.nixosSystem {
+        inherit nixpkgs;
+        trustCaches = false;
+        specialArgs = inputs // {
+          inherit definitions nixosModules;
+        };
+        modules = [ ./systems/rpi5-root-intermediate-signer.nix ];
+      };
+
+      rpi5RootCa = rpi5RootYubiKeyProvisioner;
     in
     {
       inherit nixosModules;
@@ -81,6 +92,8 @@
         localPackages
         // nixpkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "aarch64-linux") {
           rpi5-root-ca-sd-image = rpi5RootCa.config.system.build.sdImage;
+          rpi5-root-yubikey-provisioner-sd-image = rpi5RootYubiKeyProvisioner.config.system.build.sdImage;
+          rpi5-root-intermediate-signer-sd-image = rpi5RootIntermediateSigner.config.system.build.sdImage;
         }
       );
 
@@ -126,6 +139,8 @@
 
       nixosConfigurations = {
         rpi5-root-ca = rpi5RootCa;
+        rpi5-root-yubikey-provisioner = rpi5RootYubiKeyProvisioner;
+        rpi5-root-intermediate-signer = rpi5RootIntermediateSigner;
       };
     };
 }

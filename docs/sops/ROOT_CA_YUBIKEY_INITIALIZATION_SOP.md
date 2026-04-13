@@ -55,6 +55,8 @@ Before starting, gather the following.
    convenience flag.
 6. Preserve the generated public artifacts, plan, and summary as part of the
    root CA inventory record.
+7. Keep the PIN, PUK, and management key files outside `--work-dir`; the work
+   directory is for public ceremony artifacts only.
 
 ## Procedure
 
@@ -130,6 +132,11 @@ The command reads trimmed values from those files and validates:
 1. PIN length is 6 to 8 characters
 2. PUK length is 6 to 8 characters
 3. Management key is exactly 64 hexadecimal characters
+4. The files are owner-readable only, with no group or world access
+5. The files are outside `--work-dir`
+6. The PIN and PUK are not factory-default values
+7. The management key is not the factory-default value
+8. The PIN and PUK are not identical
 
 ### 4. Generate And Review The Dry-Run Plan
 
@@ -170,6 +177,15 @@ Confirm the plan shows:
    policy
 3. The expected certificate install path and archive directory
 4. The expected PKCS#11 module path, provider directory, and routine key URI
+5. The exact `--work-dir` you intend to reuse for the apply step
+
+Dry-run is intentionally review-only:
+
+1. Do not pass `--force-reset` with `--dry-run`
+2. Do not pass `--pin-file`, `--puk-file`, or `--management-key-file` with
+   `--dry-run`
+3. Reuse the same `--work-dir` for the apply step so the reviewed plan remains
+   the ceremony record
 
 ### 5. Apply The Reset-Based Initialization
 
@@ -216,6 +232,15 @@ This command performs the following actions:
 11. Installs the root certificate to the configured runtime path
 12. Archives the generated public artifacts, plan, and summary
 
+Before the command touches hardware, it also refuses to continue unless all of
+the following are true:
+
+1. The reviewed dry-run plan already exists in the same `--work-dir`
+2. The reviewed plan exactly matches the current apply invocation
+3. The secret files are owner-only and outside `--work-dir`
+4. The target install path does not already exist
+5. The archive directory does not already contain files
+
 ### 6. Review The Summary And Installed Outputs
 
 Review the generated summary:
@@ -250,6 +275,12 @@ INSTALL_PATH="$(jq -r '.certificateInstallPath' "$WORKDIR/root-yubikey-init-summ
 ARCHIVE_DIR="$(jq -r '.archiveDirectory' "$WORKDIR/root-yubikey-init-summary.json")"
 test -f "$INSTALL_PATH"
 find "$ARCHIVE_DIR" -maxdepth 1 -type f | sort
+```
+
+Confirm that the summary recorded the reviewed plan path and digest:
+
+```bash
+jq '.reviewedPlan' "$WORKDIR/root-yubikey-init-summary.json"
 ```
 
 ### 7. Cleanup
@@ -295,8 +326,9 @@ Initialization is complete only if all of the following are true.
    root profile and ceremony record
 6. The runtime root certificate exists at the installed path from the summary
 7. The attestation certificate, metadata, plan, and summary have been archived
-8. The routine signing URI has been recorded from `root-key-uri.txt`
-9. The PIN, PUK, and management key were not copied into the archive
+8. The summary records the reviewed dry-run plan path and digest
+9. The routine signing URI has been recorded from `root-key-uri.txt`
+10. The PIN, PUK, and management key were not copied into the archive
 
 ## Failure Handling
 
@@ -304,15 +336,18 @@ Use the following rules if something goes wrong.
 
 1. If dry-run validation fails, stop and correct the profile or invocation
    before touching hardware.
-2. If the destructive apply step fails before key generation, you may rerun the
+2. If apply preflight rejects the reviewed plan, secret files, archive
+   directory, or install path, fix those inputs first and rerun `--dry-run`
+   when required before attempting apply again.
+3. If the destructive apply step fails before key generation, you may rerun the
    procedure on the same token after re-establishing a clean state.
-3. If the apply step fails after key generation but before the summary and
+4. If the apply step fails after key generation but before the summary and
    archive are complete, stop and decide whether to complete the ceremony or
    formally destroy and reinitialize the token.
-4. If the wrong subject, validity period, slot, or policy was used, do not
+5. If the wrong subject, validity period, slot, or policy was used, do not
    place the token into production use. Escalate for explicit destroy-and-
    replace approval.
-5. If the token already carried an issued production root key, do not continue
+6. If the token already carried an issued production root key, do not continue
    with this SOP. Use the manual fallback SOP to inspect and recover safely.
 
 ## Result

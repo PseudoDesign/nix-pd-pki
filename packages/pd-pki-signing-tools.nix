@@ -141,8 +141,87 @@ pkgs.writeShellApplication {
       esac
     }
 
+    require_absolute_path() {
+      local path="$1"
+      local label="$2"
+
+      case "$path" in
+        /*)
+          ;;
+        *)
+          die "$label must be an absolute path: $path"
+          ;;
+      esac
+    }
+
+    canonicalize_path() {
+      realpath -m -- "$1"
+    }
+
+    path_is_within() {
+      local path=""
+      local base=""
+
+      path="$(canonicalize_path "$1")"
+      base="$(canonicalize_path "$2")"
+
+      [ "$path" = "$base" ] && return 0
+      case "$path" in
+        "$base"/*) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
+
+    directory_has_entries() {
+      local path="$1"
+      local first_entry=""
+
+      [ -d "$path" ] || return 1
+      first_entry="$(find "$path" -mindepth 1 -maxdepth 1 -print -quit)"
+      [ -n "$first_entry" ]
+    }
+
+    validate_owner_only_file_permissions() {
+      local path="$1"
+      local label="$2"
+      local mode=""
+      local permission_bits=0
+
+      require_file "$path"
+      [ -r "$path" ] || die "$label file is not readable: $path"
+      mode="$(stat -c '%a' "$path")"
+      permission_bits=$((8#$mode))
+      [ $((permission_bits & 0400)) -ne 0 ] || die "$label file must be owner-readable: $path"
+      [ $((permission_bits & 077)) -eq 0 ] || die "$label file permissions are too broad; expected owner-only access: $path"
+    }
+
+    validate_yubikey_serial() {
+      local serial="$1"
+
+      validate_unsigned_decimal "$serial" "--yubikey-serial"
+      [ "$serial" != "0" ] || die "--yubikey-serial must be greater than zero"
+    }
+
+    validate_not_factory_default() {
+      local value="$1"
+      local label="$2"
+      local factory_default="$3"
+
+      [ "$value" != "$factory_default" ] || die "$label must not use the factory-default value"
+    }
+
+    file_sha256() {
+      sha256sum "$1" | cut -d' ' -f1
+    }
+
     validate_root_yubikey_profile() {
       local profile_path="$1"
+      local subject=""
+      local slot=""
+      local pkcs11_module_path=""
+      local pkcs11_provider_directory=""
+      local certificate_install_path=""
+      local archive_base_directory=""
 
       require_file "$profile_path"
       jq -e '
@@ -160,6 +239,24 @@ pkgs.writeShellApplication {
         (.certificateInstallPath | type == "string" and length > 0) and
         (.archiveBaseDirectory | type == "string" and length > 0)
       ' "$profile_path" >/dev/null || die "Invalid root YubiKey initialization profile: $profile_path"
+
+      subject="$(jq -r '.subject' "$profile_path")"
+      slot="$(jq -r '.slot' "$profile_path")"
+      pkcs11_module_path="$(jq -r '.pkcs11ModulePath' "$profile_path")"
+      pkcs11_provider_directory="$(jq -r '.pkcs11ProviderDirectory' "$profile_path")"
+      certificate_install_path="$(jq -r '.certificateInstallPath' "$profile_path")"
+      archive_base_directory="$(jq -r '.archiveBaseDirectory' "$profile_path")"
+
+      case "$subject" in
+        *$'\n'*|*$'\r'*)
+          die "Root YubiKey subject must be a single-line OpenSSL slash subject"
+          ;;
+      esac
+      root_yubikey_slot_object_id "$slot" >/dev/null
+      require_absolute_path "$pkcs11_module_path" "Profile pkcs11ModulePath"
+      require_absolute_path "$pkcs11_provider_directory" "Profile pkcs11ProviderDirectory"
+      require_absolute_path "$certificate_install_path" "Profile certificateInstallPath"
+      require_absolute_path "$archive_base_directory" "Profile archiveBaseDirectory"
     }
 
     root_yubikey_slot_object_id() {
@@ -335,6 +432,7 @@ EOF
       local certificate_install_path="$7"
       local archive_dir="$8"
       local profile_path="$9"
+      local reviewed_plan_path="''${10}"
 
       jq -n \
         --arg completedAt "$(current_timestamp_utc)" \
@@ -344,6 +442,8 @@ EOF
         --arg certificateInstallPath "$certificate_install_path" \
         --arg archiveDirectory "$archive_dir" \
         --arg profilePath "$profile_path" \
+        --arg reviewedPlanPath "$reviewed_plan_path" \
+        --arg reviewedPlanSha256 "$(file_sha256 "$reviewed_plan_path")" \
         --arg subject "$(certificate_subject "$certificate_path")" \
         --arg serial "$(certificate_serial "$certificate_path")" \
         --arg fingerprint "$(certificate_fingerprint "$certificate_path")" \
@@ -358,6 +458,10 @@ EOF
           slot: $slot,
           routineKeyUri: $routineKeyUri,
           profilePath: $profilePath,
+          reviewedPlan: {
+            path: $reviewedPlanPath,
+            sha256: $reviewedPlanSha256
+          },
           certificateInstallPath: $certificateInstallPath,
           archiveDirectory: $archiveDirectory,
           certificate: {
@@ -1228,6 +1332,7 @@ EOF
 
       [ -n "$yubikey_serial" ] || die "--yubikey-serial is required"
       [ -n "$work_dir" ] || die "--work-dir is required"
+      validate_yubikey_serial "$yubikey_serial"
       validate_root_yubikey_profile "$profile_path"
 
       if { [ -n "$pin_retries" ] || [ -n "$puk_retries" ]; } && { [ -z "$pin_retries" ] || [ -z "$puk_retries" ]; }; then
@@ -1235,6 +1340,12 @@ EOF
       fi
       [ -z "$pin_retries" ] || validate_unsigned_decimal "$pin_retries" "--pin-retries"
       [ -z "$puk_retries" ] || validate_unsigned_decimal "$puk_retries" "--puk-retries"
+      if [ "$dry_run" = "1" ]; then
+        [ "$force_reset" = "0" ] || die "--force-reset cannot be combined with --dry-run"
+        [ -z "$pin_file" ] || die "--pin-file cannot be combined with --dry-run"
+        [ -z "$puk_file" ] || die "--puk-file cannot be combined with --dry-run"
+        [ -z "$management_key_file" ] || die "--management-key-file cannot be combined with --dry-run"
+      fi
 
       local subject=""
       local validity_days=""
@@ -1265,6 +1376,8 @@ EOF
       local device_info_after_path=""
       local piv_info_after_path=""
       local digest=""
+      local expected_plan_path=""
+      local reviewed_plan_hash_before=""
 
       subject="$(jq -r '.subject' "$profile_path")"
       validity_days="$(jq -r '.validityDays | tostring' "$profile_path")"
@@ -1288,6 +1401,14 @@ EOF
         puk_retries_json="$puk_retries"
       fi
 
+      require_absolute_path "$profile_path" "--profile"
+      require_absolute_path "$work_dir" "--work-dir"
+      require_absolute_path "$certificate_install_path" "Certificate install path"
+      require_absolute_path "$archive_dir" "Archive directory"
+      [ "$(canonicalize_path "$work_dir")" != "/" ] || die "--work-dir cannot be /"
+      path_is_within "$archive_dir" "$work_dir" && die "Archive directory must not live under --work-dir"
+      path_is_within "$certificate_install_path" "$work_dir" && die "Certificate install path must not live under --work-dir"
+
       routine_key_uri="$(root_yubikey_pkcs11_base_uri "$slot")"
       digest="$(root_yubikey_openssl_digest "$algorithm")"
       openssl_config_path="$work_dir/root-ca-openssl.cnf"
@@ -1310,12 +1431,73 @@ EOF
       cp "$profile_path" "$profile_copy_path"
       write_root_ca_openssl_config "$openssl_config_path"
       printf '%s\n' "$routine_key_uri" > "$key_uri_path"
+
+      if [ "$dry_run" = "1" ]; then
+        write_root_yubikey_init_plan \
+          "$plan_path" \
+          "dry-run" \
+          "$profile_path" \
+          "$yubikey_serial" \
+          "false" \
+          "$pin_retries_json" \
+          "$puk_retries_json" \
+          "$subject" \
+          "$validity_days" \
+          "$slot" \
+          "$algorithm" \
+          "$pin_policy" \
+          "$touch_policy" \
+          "$pkcs11_module_path" \
+          "$pkcs11_provider_directory" \
+          "$routine_key_uri" \
+          "$certificate_install_path" \
+          "$archive_dir" \
+          "$work_dir" \
+          "$openssl_config_path" \
+          "$public_key_path" \
+          "$attestation_path" \
+          "$certificate_path" \
+          "$token_export_path" \
+          "$verified_public_key_path" \
+          "$metadata_path" \
+          "$key_uri_path" \
+          "$summary_path"
+        printf '%s\n' "Dry-run root YubiKey initialization plan written to: $plan_path"
+        return
+      fi
+
+      [ "$force_reset" = "1" ] || die "--force-reset is required unless --dry-run is used"
+      [ -n "$pin_file" ] || die "--pin-file is required unless --dry-run is used"
+      [ -n "$puk_file" ] || die "--puk-file is required unless --dry-run is used"
+      [ -n "$management_key_file" ] || die "--management-key-file is required unless --dry-run is used"
+
+      local root_pin=""
+      local root_puk=""
+      local root_management_key=""
+      local default_management_key="010203040506070801020304050607080102030405060708"
+      local ykman_algorithm=""
+      local pin_source_file=""
+      local key_uri_with_pin=""
+
+      validate_owner_only_file_permissions "$pin_file" "PIN"
+      validate_owner_only_file_permissions "$puk_file" "PUK"
+      validate_owner_only_file_permissions "$management_key_file" "Management key"
+      path_is_within "$pin_file" "$work_dir" && die "PIN file must not live under --work-dir"
+      path_is_within "$puk_file" "$work_dir" && die "PUK file must not live under --work-dir"
+      path_is_within "$management_key_file" "$work_dir" && die "Management key file must not live under --work-dir"
+      [ ! -e "$summary_path" ] || die "Refusing to reuse a work directory that already contains a root YubiKey initialization summary: $summary_path"
+      if directory_has_entries "$archive_dir"; then
+        die "Archive directory already contains files; choose a fresh archive directory: $archive_dir"
+      fi
+      [ ! -e "$certificate_install_path" ] || die "Certificate install path already exists; choose a fresh path or move the existing file aside first: $certificate_install_path"
+      require_command cmp
+      expected_plan_path="$(mktemp "$work_dir/.root-yubikey-plan.expected.XXXXXX")"
       write_root_yubikey_init_plan \
-        "$plan_path" \
-        "$(if [ "$dry_run" = "1" ]; then printf '%s' "dry-run"; else printf '%s' "apply"; fi)" \
+        "$expected_plan_path" \
+        "dry-run" \
         "$profile_path" \
         "$yubikey_serial" \
-        "$(if [ "$force_reset" = "1" ]; then printf '%s' "true"; else printf '%s' "false"; fi)" \
+        "false" \
         "$pin_retries_json" \
         "$puk_retries_json" \
         "$subject" \
@@ -1339,29 +1521,13 @@ EOF
         "$metadata_path" \
         "$key_uri_path" \
         "$summary_path"
-
-      if [ "$dry_run" = "1" ]; then
-        printf '%s\n' "Dry-run root YubiKey initialization plan written to: $plan_path"
-        return
+      [ -f "$plan_path" ] || die "Reviewed dry-run plan not found in --work-dir; run the same command with --dry-run first and review the generated plan before applying"
+      if ! cmp -s "$plan_path" "$expected_plan_path"; then
+        rm -f "$expected_plan_path"
+        die "Reviewed dry-run plan does not match the current apply invocation; rerun --dry-run in the same --work-dir and review the new plan before applying"
       fi
-
-      [ "$force_reset" = "1" ] || die "--force-reset is required unless --dry-run is used"
-      [ -n "$pin_file" ] || die "--pin-file is required unless --dry-run is used"
-      [ -n "$puk_file" ] || die "--puk-file is required unless --dry-run is used"
-      [ -n "$management_key_file" ] || die "--management-key-file is required unless --dry-run is used"
-
-      require_command ykman
-      require_command cmp
-      require_file "$pkcs11_module_path"
-      [ -d "$pkcs11_provider_directory" ] || die "PKCS#11 provider directory not found: $pkcs11_provider_directory"
-
-      local root_pin=""
-      local root_puk=""
-      local root_management_key=""
-      local default_management_key="010203040506070801020304050607080102030405060708"
-      local ykman_algorithm=""
-      local pin_source_file=""
-      local key_uri_with_pin=""
+      reviewed_plan_hash_before="$(file_sha256 "$plan_path")"
+      rm -f "$expected_plan_path"
 
       root_pin="$(read_trimmed_file_value "$pin_file" "PIN")"
       validate_length_range "$root_pin" "PIN" 6 8
@@ -1369,8 +1535,15 @@ EOF
       validate_length_range "$root_puk" "PUK" 6 8
       root_management_key="$(read_trimmed_file_value "$management_key_file" "Management key")"
       validate_hex_value "$root_management_key" "Management key" 64
+      validate_not_factory_default "$root_pin" "PIN" "123456"
+      validate_not_factory_default "$root_puk" "PUK" "12345678"
+      validate_not_factory_default "$root_management_key" "Management key" "$default_management_key"
+      [ "$root_pin" != "$root_puk" ] || die "PIN and PUK must not be identical"
       ykman_algorithm="$(printf '%s' "$algorithm" | tr '[:upper:]' '[:lower:]')"
 
+      require_file "$pkcs11_module_path"
+      [ -d "$pkcs11_provider_directory" ] || die "PKCS#11 provider directory not found: $pkcs11_provider_directory"
+      require_command ykman
       ykman --device "$yubikey_serial" info > "$device_info_before_path"
       ykman --device "$yubikey_serial" piv info > "$piv_info_before_path"
 
@@ -1453,7 +1626,8 @@ EOF
         "$attestation_path" \
         "$certificate_install_path" \
         "$archive_dir" \
-        "$profile_path"
+        "$profile_path" \
+        "$plan_path"
 
       install -d -m 700 "$archive_dir"
       install -m 644 "$certificate_path" "$archive_dir/root-ca.cert.pem"
@@ -1471,6 +1645,7 @@ EOF
       install -m 644 "$piv_info_before_path" "$archive_dir/yubikey-piv-info.before.txt"
       install -m 644 "$device_info_after_path" "$archive_dir/yubikey-device-info.after.txt"
       install -m 644 "$piv_info_after_path" "$archive_dir/yubikey-piv-info.after.txt"
+      [ "$reviewed_plan_hash_before" = "$(file_sha256 "$plan_path")" ] || die "Reviewed dry-run plan was modified during apply; aborting because the ceremony record is no longer stable"
 
       unset root_pin root_puk root_management_key default_management_key
       printf '%s\n' "Initialized root YubiKey $yubikey_serial using profile: $profile_path"

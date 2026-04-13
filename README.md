@@ -8,7 +8,7 @@ Nix-based PKI workflow toolkit for Pseudo Design.
 
 - 4 roles are implemented: root CA, intermediate signing authority, OpenVPN server leaf, and OpenVPN client leaf
 - 19 workflow steps are modeled and exported as buildable flake packages
-- 32 named checks are exported from the flake
+- 41 named checks are exported from the flake
 - role packages emit public PEM and JSON artifacts plus per-step metadata and status files
 - NixOS modules expose each role under `services.pd-pki.roles.*`; they manage mutable runtime artifacts under `/var/lib/pd-pki`, validate imported certificates, chains, CRLs, and metadata before staging them, reconcile imported artifacts on a timer, can consume provisioned inputs either from direct file paths or systemd credentials, and do not bootstrap a CA hierarchy on deployment nodes
 - `pd-pki-signing-tools` exports signer request bundles, signs them with an external issuer, imports signed artifacts back into runtime state, enforces signer-side issuance policy down to the CSR key algorithm and RSA bit length, persists signer-side issuance state with automatic serial allocation under a lock, records approval and revocation attribution, and can generate CRLs from recorded revocations

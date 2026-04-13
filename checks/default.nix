@@ -30,6 +30,10 @@ let
     // serverChecks
     // clientChecks;
 
+  e2eChecks = import ./e2e {
+    inherit pkgs packages;
+  };
+
   moduleChecks = import ./nixos-modules.nix {
     inherit pkgs definitions packages nixosModules;
   };
@@ -134,5 +138,6 @@ let
 in
 # Aggregate the shared checks plus one imported check set per role.
 sharedChecks
+// e2eChecks
 // roleChecks
 // moduleChecks

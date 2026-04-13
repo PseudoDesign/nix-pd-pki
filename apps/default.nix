@@ -17,6 +17,11 @@ let
       description = "Boot real OpenVPN server and client daemons, drive the external signer/import flow, verify tunnel establishment, and confirm revoked client certificates are rejected.";
     }
     {
+      name = "rpi5-root-ca-hardening";
+      title = "Validate Root CA Appliance Hardening";
+      description = "Confirm the offline Raspberry Pi root CA image disables onboard radios and admits only the USB classes needed for the signing workflow.";
+    }
+    {
       name = "role-topology";
       title = "Validate Linux Role Topology";
       description = "Boot one Linux VM per role and run the exported role and step checks through the installed NixOS modules.";
@@ -25,6 +30,46 @@ let
       name = "pd-pki";
       title = "Validate Aggregate Package";
       description = "Confirm the aggregate pd-pki package exposes the expected role packages.";
+    }
+    {
+      name = "signing-tools-pkcs11";
+      title = "Validate Signing Tools PKCS#11 Flow";
+      description = "Exercise the signer tooling against a software PKCS#11 token for signing, revocation, and CRL generation.";
+    }
+    {
+      name = "signing-tools-root-yubikey-init";
+      title = "Validate Root YubiKey Init Flow";
+      description = "Verify the root YubiKey initialization tooling enforces dry-run review and guarded apply preconditions.";
+    }
+    {
+      name = "e2e-root-yubikey-provisioning-contract";
+      title = "E2E: Root YubiKey Provisioning Contract";
+      description = "Validate the workflow-facing dry-run outputs that seed the root CA YubiKey provisioning contract.";
+    }
+    {
+      name = "e2e-root-yubikey-inventory-normalization";
+      title = "E2E: Root Inventory Normalization";
+      description = "Validate the normalized public root CA inventory contract that will be committed into the repository.";
+    }
+    {
+      name = "e2e-root-yubikey-identity-verification";
+      title = "E2E: Root YubiKey Identity Verification";
+      description = "Validate that workflow identity checks key off the committed root certificate and verified public key rather than serial alone.";
+    }
+    {
+      name = "e2e-root-intermediate-request-bundle-contract";
+      title = "E2E: Intermediate Request Bundle";
+      description = "Validate the removable-media request bundle exported from the intermediate runtime state.";
+    }
+    {
+      name = "e2e-root-intermediate-signed-bundle-contract";
+      title = "E2E: Intermediate Signed Bundle";
+      description = "Validate the signed intermediate bundle produced by the offline root workflow.";
+    }
+    {
+      name = "e2e-root-intermediate-airgap-handoff";
+      title = "E2E: Intermediate Air-Gap Handoff";
+      description = "Validate the request export, offline signing, USB handoff, and signed import loop for the intermediate CA workflow.";
     }
   ];
 

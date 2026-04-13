@@ -16,6 +16,18 @@
       moduleCheckNames =
         [ "nixos-module-default" ]
         ++ map (role: "nixos-module-${role.id}") definitions.roles;
+      toolingCheckNames = [
+        "signing-tools-pkcs11"
+        "signing-tools-root-yubikey-init"
+      ];
+      e2eCheckNames = [
+        "e2e-root-yubikey-provisioning-contract"
+        "e2e-root-yubikey-inventory-normalization"
+        "e2e-root-yubikey-identity-verification"
+        "e2e-root-intermediate-request-bundle-contract"
+        "e2e-root-intermediate-signed-bundle-contract"
+        "e2e-root-intermediate-airgap-handoff"
+      ];
       checkNames =
         [
           "module-runtime-artifacts"
@@ -24,6 +36,8 @@
           "role-topology"
           "pd-pki"
         ]
+        ++ toolingCheckNames
+        ++ e2eCheckNames
         ++ map (role: role.id) definitions.roles
         ++ builtins.concatLists (map (role: map (step: "${role.id}-${step.id}") role.steps) definitions.roles)
         ++ moduleCheckNames;

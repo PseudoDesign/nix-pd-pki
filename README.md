@@ -237,10 +237,11 @@ Example:
 
 The repository ships a small operator CLI as the `pd-pki-signing-tools` package. It turns the runtime artifacts emitted by the NixOS modules into portable request bundles, signs those bundles with an external issuer, and imports the signed results back into the mutable runtime paths.
 
-For manual, CLI-only root procedures, see:
+For root signer procedures, see:
 
 - [`docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md`](docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md)
-- [`docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md`](docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md)
+- [`docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md`](docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md) for the primary automated reset-based root token workflow
+- [`docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_MANUAL_SOP.md`](docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_MANUAL_SOP.md) for manual fallback and investigation
 
 For reset-based root token provisioning from the exported root profile, `pd-pki-signing-tools init-root-yubikey` can consume `/etc/pd-pki/root-yubikey-init-profile.json`; use `--dry-run` first to review the generated plan and OpenSSL config before touching hardware.
 

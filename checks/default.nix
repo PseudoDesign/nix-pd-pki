@@ -81,6 +81,12 @@ let
         inherit pkgs packages;
       };
     }
+    {
+      name = "signing-tools-root-yubikey-init";
+      value = import ./signing-tools-root-yubikey-init.nix {
+        inherit pkgs packages;
+      };
+    }
   ];
 in
 # Aggregate the shared checks plus one imported check set per role.

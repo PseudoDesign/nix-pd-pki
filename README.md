@@ -242,6 +242,8 @@ For manual, CLI-only root procedures, see:
 - [`docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md`](docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md)
 - [`docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md`](docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md)
 
+For reset-based root token provisioning from the exported root profile, `pd-pki-signing-tools init-root-yubikey` can consume `/etc/pd-pki/root-yubikey-init-profile.json`; use `--dry-run` first to review the generated plan and OpenSSL config before touching hardware.
+
 Build it with:
 
 ```bash

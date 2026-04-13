@@ -6,6 +6,7 @@ pkgs.writeShellApplication {
     pkgs.jq
     pkgs.libp11
     pkgs.openssl
+    pkgs.yubikey-manager
     pkgs.util-linux
   ];
   text = ''
@@ -17,6 +18,10 @@ pkgs.writeShellApplication {
     die() {
       printf '%s\n' "$1" >&2
       exit 1
+    }
+
+    require_command() {
+      command -v "$1" >/dev/null 2>&1 || die "Required command not found in PATH: $1"
     }
 
     require_file() {
@@ -99,6 +104,273 @@ pkgs.writeShellApplication {
 
       printf -v "$backend_var_name" '%s' "$selected_backend"
       printf -v "$key_ref_var_name" '%s' "$selected_key_ref"
+    }
+
+    read_trimmed_file_value() {
+      local path="$1"
+      local label="$2"
+      local value=""
+
+      require_file "$path"
+      value="$(tr -d '\r\n' < "$path")"
+      [ -n "$value" ] || die "$label file is empty: $path"
+      printf '%s\n' "$value"
+    }
+
+    validate_length_range() {
+      local value="$1"
+      local label="$2"
+      local minimum="$3"
+      local maximum="$4"
+      local length="''${#value}"
+
+      [ "$length" -ge "$minimum" ] || die "$label must be at least $minimum characters"
+      [ "$length" -le "$maximum" ] || die "$label must be at most $maximum characters"
+    }
+
+    validate_hex_value() {
+      local value="$1"
+      local label="$2"
+      local expected_length="$3"
+
+      [ "''${#value}" -eq "$expected_length" ] || die "$label must be exactly $expected_length hexadecimal characters"
+      case "$value" in
+        *[!0-9A-Fa-f]*)
+          die "$label must contain only hexadecimal characters"
+          ;;
+      esac
+    }
+
+    validate_root_yubikey_profile() {
+      local profile_path="$1"
+
+      require_file "$profile_path"
+      jq -e '
+        (.schemaVersion // 0) == 1 and
+        (.profileKind // "") == "root-yubikey-initialization" and
+        (.roleId // "") == "root-certificate-authority" and
+        (.subject | type == "string" and startswith("/")) and
+        (.validityDays | type == "number" and . > 0) and
+        (.slot | type == "string" and length > 0) and
+        (.algorithm | type == "string" and length > 0) and
+        (.pinPolicy | type == "string" and length > 0) and
+        (.touchPolicy | type == "string" and length > 0) and
+        (.pkcs11ModulePath | type == "string" and length > 0) and
+        (.pkcs11ProviderDirectory | type == "string" and length > 0) and
+        (.certificateInstallPath | type == "string" and length > 0) and
+        (.archiveBaseDirectory | type == "string" and length > 0)
+      ' "$profile_path" >/dev/null || die "Invalid root YubiKey initialization profile: $profile_path"
+    }
+
+    root_yubikey_slot_object_id() {
+      local slot=""
+      slot="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+
+      case "$slot" in
+        9a) printf '%s\n' "%01" ;;
+        9c) printf '%s\n' "%02" ;;
+        9d) printf '%s\n' "%03" ;;
+        9e) printf '%s\n' "%04" ;;
+        82) printf '%s\n' "%05" ;;
+        83) printf '%s\n' "%06" ;;
+        84) printf '%s\n' "%07" ;;
+        85) printf '%s\n' "%08" ;;
+        86) printf '%s\n' "%09" ;;
+        87) printf '%s\n' "%0A" ;;
+        88) printf '%s\n' "%0B" ;;
+        89) printf '%s\n' "%0C" ;;
+        8a) printf '%s\n' "%0D" ;;
+        8b) printf '%s\n' "%0E" ;;
+        8c) printf '%s\n' "%0F" ;;
+        8d) printf '%s\n' "%10" ;;
+        8e) printf '%s\n' "%11" ;;
+        8f) printf '%s\n' "%12" ;;
+        90) printf '%s\n' "%13" ;;
+        91) printf '%s\n' "%14" ;;
+        92) printf '%s\n' "%15" ;;
+        93) printf '%s\n' "%16" ;;
+        94) printf '%s\n' "%17" ;;
+        95) printf '%s\n' "%18" ;;
+        *)
+          die "Unsupported YubiKey PIV slot for PKCS#11 URI derivation: $1"
+          ;;
+      esac
+    }
+
+    root_yubikey_pkcs11_base_uri() {
+      local slot="$1"
+      printf 'pkcs11:token=YubiKey%%20PIV;id=%s;type=private\n' "$(root_yubikey_slot_object_id "$slot")"
+    }
+
+    root_yubikey_openssl_digest() {
+      local algorithm=""
+      algorithm="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+
+      case "$algorithm" in
+        ECCP384) printf '%s\n' "sha384" ;;
+        *) printf '%s\n' "sha256" ;;
+      esac
+    }
+
+    write_root_ca_openssl_config() {
+      local target="$1"
+
+      cat > "$target" <<'EOF'
+[ req ]
+distinguished_name = dn
+prompt = no
+x509_extensions = v3_root_ca
+
+[ dn ]
+CN = placeholder
+
+[ v3_root_ca ]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+EOF
+    }
+
+    write_root_yubikey_init_plan() {
+      local target="$1"
+      local mode="$2"
+      local profile_path="$3"
+      local yubikey_serial="$4"
+      local force_reset="$5"
+      local pin_retries_json="$6"
+      local puk_retries_json="$7"
+      local subject="$8"
+      local validity_days="$9"
+      local slot="''${10}"
+      local algorithm="''${11}"
+      local pin_policy="''${12}"
+      local touch_policy="''${13}"
+      local pkcs11_module_path="''${14}"
+      local pkcs11_provider_directory="''${15}"
+      local routine_key_uri="''${16}"
+      local certificate_install_path="''${17}"
+      local archive_dir="''${18}"
+      local work_dir="''${19}"
+      local config_path="''${20}"
+      local public_key_path="''${21}"
+      local attestation_path="''${22}"
+      local certificate_path="''${23}"
+      local token_export_path="''${24}"
+      local verified_public_key_path="''${25}"
+      local metadata_path="''${26}"
+      local key_uri_path="''${27}"
+      local summary_path="''${28}"
+
+      jq -n \
+        --arg mode "$mode" \
+        --arg profilePath "$profile_path" \
+        --arg yubikeySerial "$yubikey_serial" \
+        --arg subject "$subject" \
+        --arg validityDays "$validity_days" \
+        --arg slot "$slot" \
+        --arg algorithm "$algorithm" \
+        --arg pinPolicy "$pin_policy" \
+        --arg touchPolicy "$touch_policy" \
+        --arg pkcs11ModulePath "$pkcs11_module_path" \
+        --arg pkcs11ProviderDirectory "$pkcs11_provider_directory" \
+        --arg routineKeyUri "$routine_key_uri" \
+        --arg certificateInstallPath "$certificate_install_path" \
+        --arg archiveDirectory "$archive_dir" \
+        --arg workDir "$work_dir" \
+        --arg opensslConfig "$config_path" \
+        --arg publicKey "$public_key_path" \
+        --arg attestationCertificate "$attestation_path" \
+        --arg certificate "$certificate_path" \
+        --arg tokenExportCertificate "$token_export_path" \
+        --arg verifiedPublicKey "$verified_public_key_path" \
+        --arg metadata "$metadata_path" \
+        --arg keyUriFile "$key_uri_path" \
+        --arg summary "$summary_path" \
+        --argjson forceReset "$force_reset" \
+        --argjson pinRetries "$pin_retries_json" \
+        --argjson pukRetries "$puk_retries_json" \
+        '{
+          schemaVersion: 1,
+          command: "init-root-yubikey",
+          mode: $mode,
+          profilePath: $profilePath,
+          yubikeySerial: $yubikeySerial,
+          forceReset: $forceReset,
+          pinRetries: $pinRetries,
+          pukRetries: $pukRetries,
+          subject: $subject,
+          validityDays: ($validityDays | tonumber),
+          slot: $slot,
+          algorithm: $algorithm,
+          pinPolicy: $pinPolicy,
+          touchPolicy: $touchPolicy,
+          pkcs11ModulePath: $pkcs11ModulePath,
+          pkcs11ProviderDirectory: $pkcs11ProviderDirectory,
+          routineKeyUri: $routineKeyUri,
+          certificateInstallPath: $certificateInstallPath,
+          archiveDirectory: $archiveDirectory,
+          workDir: $workDir,
+          artifacts: {
+            opensslConfig: $opensslConfig,
+            publicKey: $publicKey,
+            attestationCertificate: $attestationCertificate,
+            certificate: $certificate,
+            tokenExportCertificate: $tokenExportCertificate,
+            verifiedPublicKey: $verifiedPublicKey,
+            metadata: $metadata,
+            keyUriFile: $keyUriFile,
+            summary: $summary
+          }
+        }' > "$target"
+    }
+
+    write_root_yubikey_init_summary() {
+      local target="$1"
+      local yubikey_serial="$2"
+      local slot="$3"
+      local routine_key_uri="$4"
+      local certificate_path="$5"
+      local attestation_path="$6"
+      local certificate_install_path="$7"
+      local archive_dir="$8"
+      local profile_path="$9"
+
+      jq -n \
+        --arg completedAt "$(current_timestamp_utc)" \
+        --arg yubikeySerial "$yubikey_serial" \
+        --arg slot "$slot" \
+        --arg routineKeyUri "$routine_key_uri" \
+        --arg certificateInstallPath "$certificate_install_path" \
+        --arg archiveDirectory "$archive_dir" \
+        --arg profilePath "$profile_path" \
+        --arg subject "$(certificate_subject "$certificate_path")" \
+        --arg serial "$(certificate_serial "$certificate_path")" \
+        --arg fingerprint "$(certificate_fingerprint "$certificate_path")" \
+        --arg notBefore "$(certificate_not_before "$certificate_path")" \
+        --arg notAfter "$(certificate_not_after "$certificate_path")" \
+        --arg attestationFingerprint "$(certificate_fingerprint "$attestation_path")" \
+        '{
+          schemaVersion: 1,
+          command: "init-root-yubikey",
+          completedAt: $completedAt,
+          yubikeySerial: $yubikeySerial,
+          slot: $slot,
+          routineKeyUri: $routineKeyUri,
+          profilePath: $profilePath,
+          certificateInstallPath: $certificateInstallPath,
+          archiveDirectory: $archiveDirectory,
+          certificate: {
+            subject: $subject,
+            serial: $serial,
+            sha256Fingerprint: $fingerprint,
+            notBefore: $notBefore,
+            notAfter: $notAfter
+          },
+          attestation: {
+            sha256Fingerprint: $attestationFingerprint
+          }
+        }' > "$target"
     }
 
     certificate_basename_for_role() {
@@ -875,12 +1147,335 @@ pkgs.writeShellApplication {
     usage() {
       cat <<'EOF' >&2
 Usage:
+  pd-pki-signing-tools init-root-yubikey [--profile FILE] --yubikey-serial SERIAL --work-dir DIR [--certificate-install-path PATH] [--archive-dir PATH] [--pin-retries N --puk-retries N] [--pin-file FILE --puk-file FILE --management-key-file FILE --force-reset] [--dry-run]
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
   pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR (--issuer-key PATH | --issuer-key-uri URI --pkcs11-module PATH [--pkcs11-pin-file PATH]) --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--approved-by ID] [--approval-ticket ID] [--approval-note TEXT] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
   pd-pki-signing-tools generate-crl --signer-state-dir DIR (--issuer-key PATH | --issuer-key-uri URI --pkcs11-module PATH [--pkcs11-pin-file PATH]) --issuer-cert PATH --out-dir DIR [--days DAYS]
   pd-pki-signing-tools revoke-issued --signer-state-dir DIR --serial SERIAL [--reason REASON] [--revoked-by ID] [--revocation-ticket ID] [--revocation-note TEXT]
 EOF
+    }
+
+    init_root_yubikey() {
+      local profile_path="/etc/pd-pki/root-yubikey-init-profile.json"
+      local yubikey_serial=""
+      local work_dir=""
+      local certificate_install_path=""
+      local archive_dir=""
+      local pin_file=""
+      local puk_file=""
+      local management_key_file=""
+      local pin_retries=""
+      local puk_retries=""
+      local dry_run=0
+      local force_reset=0
+
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --profile)
+            profile_path="$2"
+            shift 2
+            ;;
+          --yubikey-serial)
+            yubikey_serial="$2"
+            shift 2
+            ;;
+          --work-dir)
+            work_dir="$2"
+            shift 2
+            ;;
+          --certificate-install-path)
+            certificate_install_path="$2"
+            shift 2
+            ;;
+          --archive-dir)
+            archive_dir="$2"
+            shift 2
+            ;;
+          --pin-file)
+            pin_file="$2"
+            shift 2
+            ;;
+          --puk-file)
+            puk_file="$2"
+            shift 2
+            ;;
+          --management-key-file)
+            management_key_file="$2"
+            shift 2
+            ;;
+          --pin-retries)
+            pin_retries="$2"
+            shift 2
+            ;;
+          --puk-retries)
+            puk_retries="$2"
+            shift 2
+            ;;
+          --dry-run)
+            dry_run=1
+            shift
+            ;;
+          --force-reset)
+            force_reset=1
+            shift
+            ;;
+          *)
+            die "Unknown init-root-yubikey argument: $1"
+            ;;
+        esac
+      done
+
+      [ -n "$yubikey_serial" ] || die "--yubikey-serial is required"
+      [ -n "$work_dir" ] || die "--work-dir is required"
+      validate_root_yubikey_profile "$profile_path"
+
+      if { [ -n "$pin_retries" ] || [ -n "$puk_retries" ]; } && { [ -z "$pin_retries" ] || [ -z "$puk_retries" ]; }; then
+        die "--pin-retries and --puk-retries must be provided together"
+      fi
+      [ -z "$pin_retries" ] || validate_unsigned_decimal "$pin_retries" "--pin-retries"
+      [ -z "$puk_retries" ] || validate_unsigned_decimal "$puk_retries" "--puk-retries"
+
+      local subject=""
+      local validity_days=""
+      local slot=""
+      local algorithm=""
+      local pin_policy=""
+      local touch_policy=""
+      local pkcs11_module_path=""
+      local pkcs11_provider_directory=""
+      local default_certificate_install_path=""
+      local default_archive_base_directory=""
+      local routine_key_uri=""
+      local pin_retries_json="null"
+      local puk_retries_json="null"
+      local openssl_config_path=""
+      local public_key_path=""
+      local attestation_path=""
+      local certificate_path=""
+      local token_export_path=""
+      local verified_public_key_path=""
+      local metadata_path=""
+      local key_uri_path=""
+      local plan_path=""
+      local summary_path=""
+      local profile_copy_path=""
+      local device_info_before_path=""
+      local piv_info_before_path=""
+      local device_info_after_path=""
+      local piv_info_after_path=""
+      local digest=""
+
+      subject="$(jq -r '.subject' "$profile_path")"
+      validity_days="$(jq -r '.validityDays | tostring' "$profile_path")"
+      slot="$(jq -r '.slot' "$profile_path")"
+      algorithm="$(jq -r '.algorithm' "$profile_path")"
+      pin_policy="$(jq -r '.pinPolicy' "$profile_path")"
+      touch_policy="$(jq -r '.touchPolicy' "$profile_path")"
+      pkcs11_module_path="$(jq -r '.pkcs11ModulePath' "$profile_path")"
+      pkcs11_provider_directory="$(jq -r '.pkcs11ProviderDirectory' "$profile_path")"
+      default_certificate_install_path="$(jq -r '.certificateInstallPath' "$profile_path")"
+      default_archive_base_directory="$(jq -r '.archiveBaseDirectory' "$profile_path")"
+
+      if [ -z "$certificate_install_path" ]; then
+        certificate_install_path="$default_certificate_install_path"
+      fi
+      if [ -z "$archive_dir" ]; then
+        archive_dir="$default_archive_base_directory/root-$yubikey_serial"
+      fi
+      if [ -n "$pin_retries" ]; then
+        pin_retries_json="$pin_retries"
+        puk_retries_json="$puk_retries"
+      fi
+
+      routine_key_uri="$(root_yubikey_pkcs11_base_uri "$slot")"
+      digest="$(root_yubikey_openssl_digest "$algorithm")"
+      openssl_config_path="$work_dir/root-ca-openssl.cnf"
+      public_key_path="$work_dir/root-ca.pub.pem"
+      attestation_path="$work_dir/root-ca.attestation.cert.pem"
+      certificate_path="$work_dir/root-ca.cert.pem"
+      token_export_path="$work_dir/root-ca.token-export.cert.pem"
+      verified_public_key_path="$work_dir/root-ca.pub.verified.pem"
+      metadata_path="$work_dir/root-ca.metadata.json"
+      key_uri_path="$work_dir/root-key-uri.txt"
+      plan_path="$work_dir/root-yubikey-init-plan.json"
+      summary_path="$work_dir/root-yubikey-init-summary.json"
+      profile_copy_path="$work_dir/root-yubikey-profile.json"
+      device_info_before_path="$work_dir/yubikey-device-info.before.txt"
+      piv_info_before_path="$work_dir/yubikey-piv-info.before.txt"
+      device_info_after_path="$work_dir/yubikey-device-info.after.txt"
+      piv_info_after_path="$work_dir/yubikey-piv-info.after.txt"
+
+      install -d -m 700 "$work_dir"
+      cp "$profile_path" "$profile_copy_path"
+      write_root_ca_openssl_config "$openssl_config_path"
+      printf '%s\n' "$routine_key_uri" > "$key_uri_path"
+      write_root_yubikey_init_plan \
+        "$plan_path" \
+        "$(if [ "$dry_run" = "1" ]; then printf '%s' "dry-run"; else printf '%s' "apply"; fi)" \
+        "$profile_path" \
+        "$yubikey_serial" \
+        "$(if [ "$force_reset" = "1" ]; then printf '%s' "true"; else printf '%s' "false"; fi)" \
+        "$pin_retries_json" \
+        "$puk_retries_json" \
+        "$subject" \
+        "$validity_days" \
+        "$slot" \
+        "$algorithm" \
+        "$pin_policy" \
+        "$touch_policy" \
+        "$pkcs11_module_path" \
+        "$pkcs11_provider_directory" \
+        "$routine_key_uri" \
+        "$certificate_install_path" \
+        "$archive_dir" \
+        "$work_dir" \
+        "$openssl_config_path" \
+        "$public_key_path" \
+        "$attestation_path" \
+        "$certificate_path" \
+        "$token_export_path" \
+        "$verified_public_key_path" \
+        "$metadata_path" \
+        "$key_uri_path" \
+        "$summary_path"
+
+      if [ "$dry_run" = "1" ]; then
+        printf '%s\n' "Dry-run root YubiKey initialization plan written to: $plan_path"
+        return
+      fi
+
+      [ "$force_reset" = "1" ] || die "--force-reset is required unless --dry-run is used"
+      [ -n "$pin_file" ] || die "--pin-file is required unless --dry-run is used"
+      [ -n "$puk_file" ] || die "--puk-file is required unless --dry-run is used"
+      [ -n "$management_key_file" ] || die "--management-key-file is required unless --dry-run is used"
+
+      require_command ykman
+      require_command cmp
+      require_file "$pkcs11_module_path"
+      [ -d "$pkcs11_provider_directory" ] || die "PKCS#11 provider directory not found: $pkcs11_provider_directory"
+
+      local root_pin=""
+      local root_puk=""
+      local root_management_key=""
+      local default_management_key="010203040506070801020304050607080102030405060708"
+      local ykman_algorithm=""
+      local pin_source_file=""
+      local key_uri_with_pin=""
+
+      root_pin="$(read_trimmed_file_value "$pin_file" "PIN")"
+      validate_length_range "$root_pin" "PIN" 6 8
+      root_puk="$(read_trimmed_file_value "$puk_file" "PUK")"
+      validate_length_range "$root_puk" "PUK" 6 8
+      root_management_key="$(read_trimmed_file_value "$management_key_file" "Management key")"
+      validate_hex_value "$root_management_key" "Management key" 64
+      ykman_algorithm="$(printf '%s' "$algorithm" | tr '[:upper:]' '[:lower:]')"
+
+      ykman --device "$yubikey_serial" info > "$device_info_before_path"
+      ykman --device "$yubikey_serial" piv info > "$piv_info_before_path"
+
+      ykman --device "$yubikey_serial" piv reset --force
+      if [ -n "$pin_retries" ]; then
+        ykman --device "$yubikey_serial" piv access set-retries "$pin_retries" "$puk_retries" \
+          --management-key "$default_management_key" \
+          --force
+      fi
+      ykman --device "$yubikey_serial" piv access change-pin \
+        --pin 123456 \
+        --new-pin "$root_pin"
+      ykman --device "$yubikey_serial" piv access change-puk \
+        --puk 12345678 \
+        --new-puk "$root_puk"
+      ykman --device "$yubikey_serial" piv access change-management-key \
+        --algorithm aes256 \
+        --management-key "$default_management_key" \
+        --new-management-key "$root_management_key" \
+        --force
+
+      ykman --device "$yubikey_serial" piv keys generate "$slot" "$public_key_path" \
+        --management-key "$root_management_key" \
+        --algorithm "$ykman_algorithm" \
+        --pin-policy "$pin_policy" \
+        --touch-policy "$touch_policy"
+      ykman --device "$yubikey_serial" piv keys attest "$slot" "$attestation_path"
+
+      pin_source_file="$(mktemp "$work_dir/.root-pin.XXXXXX")"
+      chmod 600 "$pin_source_file"
+      printf '%s\n' "$root_pin" > "$pin_source_file"
+      key_uri_with_pin="$(pkcs11_uri_with_pin_source "$routine_key_uri" "$pin_source_file")"
+
+      export PD_PKI_PKCS11_PROVIDER_DIR="$pkcs11_provider_directory"
+      export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module_path"
+      if ! openssl_with_signer_backend pkcs11 req -new -x509 \
+        -key "$key_uri_with_pin" \
+        -subj "$subject" \
+        -days "$validity_days" \
+        "-$digest" \
+        -extensions v3_root_ca \
+        -config "$openssl_config_path" \
+        -out "$certificate_path"; then
+        rm -f "$pin_source_file"
+        die "Failed to generate the self-signed root certificate through the YubiKey PKCS#11 key"
+      fi
+      rm -f "$pin_source_file"
+
+      ykman --device "$yubikey_serial" piv certificates import "$slot" "$certificate_path" \
+        --management-key "$root_management_key" \
+        --pin "$root_pin" \
+        --verify \
+        --no-update-chuid
+      ykman --device "$yubikey_serial" piv objects generate CHUID \
+        --management-key "$root_management_key" \
+        --pin "$root_pin"
+      ykman --device "$yubikey_serial" piv objects generate CCC \
+        --management-key "$root_management_key" \
+        --pin "$root_pin"
+
+      ykman --device "$yubikey_serial" piv certificates export "$slot" "$token_export_path"
+      cmp -s "$certificate_path" "$token_export_path" || die "The certificate exported from the YubiKey does not match the locally generated copy"
+      ykman --device "$yubikey_serial" piv keys export "$slot" "$verified_public_key_path" \
+        --verify \
+        --pin "$root_pin"
+
+      openssl verify -CAfile "$certificate_path" "$certificate_path" >/dev/null
+      write_certificate_metadata "$certificate_path" "$metadata_path" "root-ca-yubikey-initialized"
+      install -D -m 644 "$certificate_path" "$certificate_install_path"
+
+      ykman --device "$yubikey_serial" info > "$device_info_after_path"
+      ykman --device "$yubikey_serial" piv info > "$piv_info_after_path"
+
+      write_root_yubikey_init_summary \
+        "$summary_path" \
+        "$yubikey_serial" \
+        "$slot" \
+        "$routine_key_uri" \
+        "$certificate_path" \
+        "$attestation_path" \
+        "$certificate_install_path" \
+        "$archive_dir" \
+        "$profile_path"
+
+      install -d -m 700 "$archive_dir"
+      install -m 644 "$certificate_path" "$archive_dir/root-ca.cert.pem"
+      install -m 644 "$token_export_path" "$archive_dir/root-ca.token-export.cert.pem"
+      install -m 644 "$public_key_path" "$archive_dir/root-ca.pub.pem"
+      install -m 644 "$verified_public_key_path" "$archive_dir/root-ca.pub.verified.pem"
+      install -m 644 "$attestation_path" "$archive_dir/root-ca.attestation.cert.pem"
+      install -m 644 "$metadata_path" "$archive_dir/root-ca.metadata.json"
+      install -m 644 "$plan_path" "$archive_dir/root-yubikey-init-plan.json"
+      install -m 644 "$summary_path" "$archive_dir/root-yubikey-init-summary.json"
+      install -m 644 "$openssl_config_path" "$archive_dir/root-ca-openssl.cnf"
+      install -m 644 "$key_uri_path" "$archive_dir/root-key-uri.txt"
+      install -m 644 "$profile_copy_path" "$archive_dir/root-yubikey-profile.json"
+      install -m 644 "$device_info_before_path" "$archive_dir/yubikey-device-info.before.txt"
+      install -m 644 "$piv_info_before_path" "$archive_dir/yubikey-piv-info.before.txt"
+      install -m 644 "$device_info_after_path" "$archive_dir/yubikey-device-info.after.txt"
+      install -m 644 "$piv_info_after_path" "$archive_dir/yubikey-piv-info.after.txt"
+
+      unset root_pin root_puk root_management_key default_management_key
+      printf '%s\n' "Initialized root YubiKey $yubikey_serial using profile: $profile_path"
+      printf '%s\n' "Installed certificate to: $certificate_install_path"
+      printf '%s\n' "Archived public artifacts to: $archive_dir"
     }
 
     export_request() {
@@ -1630,6 +2225,9 @@ EOF
     shift
 
     case "$command" in
+      init-root-yubikey)
+        init_root_yubikey "$@"
+        ;;
       export-request)
         export_request "$@"
         ;;

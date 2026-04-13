@@ -99,6 +99,7 @@ The flake exports the following top-level outputs:
   - `pd-pki`
   - `pd-pki-signing-tools`
   - `pd-pki-operator`
+  - `rpi5-root-ca-sd-image` on `aarch64-linux`
   - one package per role
   - one package per workflow step, named `<role-id>-<step-id>`
 - `checks`
@@ -114,6 +115,8 @@ The flake exports the following top-level outputs:
   - `intermediate-signing-authority`
   - `openvpn-server-leaf`
   - `openvpn-client-leaf`
+- `nixosConfigurations`
+  - `rpi5-root-ca`
 - `apps.test-report`
 - `apps.pd-pki-operator`
 - `lib`
@@ -131,6 +134,38 @@ Outputs are generated for:
 - `aarch64-darwin`
 
 The heavier NixOS VM tests run only on Linux hosts.
+
+## Raspberry Pi 5 Image
+
+The flake exports a dedicated Raspberry Pi 5 root CA appliance configuration at
+`nixosConfigurations.rpi5-root-ca` plus a convenience SD image package at
+`packages.aarch64-linux.rpi5-root-ca-sd-image`.
+
+It combines the `pd-pki` root CA module with
+[`nixos-raspberrypi`](https://github.com/nvmd/nixos-raspberrypi) for Raspberry
+Pi 5 bootloader, firmware, kernel, and SD image support.
+
+Build the SD image with:
+
+```bash
+nix build .#packages.aarch64-linux.rpi5-root-ca-sd-image
+```
+
+The resulting compressed image will be under `result/sd-image/`.
+
+Operational defaults for this appliance:
+
+- boots into a headless offline root CA workstation profile
+- enables `pcscd` and preinstalls `pd-pki-signing-tools`, `pd-pki-operator`,
+  `openssl`, `jq`, `opensc`, and `yubikey-manager`
+- exports `/etc/pd-pki/root-yubikey-init-profile.json` for the root YubiKey
+  ceremony
+- disables SSH, NetworkManager, and wireless configuration
+- enables local console autologin for the `operator` account by default for
+  first-boot usability; review and harden that policy before production use
+
+If you build from a non-`aarch64-linux` host, you will usually need either
+binfmt emulation or an `aarch64-linux` builder available to Nix.
 
 ## Package Layout
 

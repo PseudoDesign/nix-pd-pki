@@ -1,9 +1,15 @@
 {
   description = "PKI Infrastructure for Pseudo Design";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixos-raspberrypi = {
+      url = "github:nvmd/nixos-raspberrypi/main";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
 
-  outputs = { nixpkgs, ... }:
+  outputs = inputs@{ self, nixpkgs, nixos-raspberrypi, ... }:
     let
       definitions = import ./packages/definitions.nix;
       nixosModules = import ./modules;
@@ -29,6 +35,15 @@
 
       forAllSystems = f:
         nixpkgs.lib.genAttrs systems (system: f (import nixpkgs { inherit system; }));
+
+      rpi5RootCa = nixos-raspberrypi.lib.nixosSystem {
+        inherit nixpkgs;
+        trustCaches = false;
+        specialArgs = inputs // {
+          inherit definitions nixosModules;
+        };
+        modules = [ ./systems/rpi5-root-ca.nix ];
+      };
     in
     {
       inherit nixosModules;
@@ -43,8 +58,14 @@
 
       packages = forAllSystems (
         pkgs:
-        import ./packages {
-          inherit pkgs definitions;
+        let
+          localPackages = import ./packages {
+            inherit pkgs definitions;
+          };
+        in
+        localPackages
+        // nixpkgs.lib.optionalAttrs (pkgs.system == "aarch64-linux") {
+          rpi5-root-ca-sd-image = rpi5RootCa.config.system.build.sdImage;
         }
       );
 
@@ -87,5 +108,9 @@
           };
         }
       );
+
+      nixosConfigurations = {
+        rpi5-root-ca = rpi5RootCa;
+      };
     };
 }

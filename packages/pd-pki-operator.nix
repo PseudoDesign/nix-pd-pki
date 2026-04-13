@@ -34,6 +34,10 @@ pkgs.writeShellApplication {
     to removable media, signing request bundles from removable media, importing
     signed bundles back into runtime state, and exporting CRLs.
 
+    The root PKCS#11 signing path for intermediate requests requires the
+    inserted token to pass root identity verification against committed root
+    inventory before signing continues.
+
     Signing supports either PEM issuer key paths or PKCS#11-backed keys such as
     YubiKey PIV slots. The wizard can discover token certificate objects and
     guide the operator through entering a token PIN.
@@ -412,6 +416,26 @@ pkgs.writeShellApplication {
       jq -r '.yubiKey.serial // empty' "$1/manifest.json" 2>/dev/null || true
     }
 
+    root_yubikey_identity_summary_root_id() {
+      jq -r '.rootId // empty' "$1" 2>/dev/null || true
+    }
+
+    root_yubikey_identity_summary_inventory_serial() {
+      jq -r '.inventorySerial // empty' "$1" 2>/dev/null || true
+    }
+
+    root_yubikey_identity_summary_yubikey_serial() {
+      jq -r '.yubikeySerial // empty' "$1" 2>/dev/null || true
+    }
+
+    root_yubikey_identity_summary_certificate_match() {
+      jq -r '.certificate.match // empty' "$1" 2>/dev/null || true
+    }
+
+    root_yubikey_identity_summary_public_key_match() {
+      jq -r '.verifiedPublicKey.match // empty' "$1" 2>/dev/null || true
+    }
+
     find_request_bundles() {
       local root_dir="$1"
       local request_file=""
@@ -434,6 +458,26 @@ pkgs.writeShellApplication {
           printf '%s\t%s\t%s\t%s\n' "$request_dir" "$role" "$common_name" "$basename"
         fi
       done < <(find "$root_dir" -maxdepth 4 -type f -name request.json -print0 2>/dev/null)
+    }
+
+    find_root_inventory_dirs() {
+      local root_dir="$1"
+      local manifest_path=""
+      local inventory_dir=""
+      local root_id=""
+      local subject=""
+      local yubikey_serial=""
+
+      while IFS= read -r -d $'\0' manifest_path; do
+        inventory_dir="$(dirname "$manifest_path")"
+        root_id="$(jq -r '.rootId // empty' "$manifest_path" 2>/dev/null || true)"
+        subject="$(jq -r '.certificate.subject // empty' "$manifest_path" 2>/dev/null || true)"
+        yubikey_serial="$(jq -r '.yubiKey.serial // empty' "$manifest_path" 2>/dev/null || true)"
+
+        if [ -n "$root_id" ] && [ -f "$inventory_dir/root-ca.cert.pem" ]; then
+          printf '%s\t%s\t%s\t%s\n' "$inventory_dir" "$root_id" "$subject" "$yubikey_serial"
+        fi
+      done < <(find "$root_dir" -maxdepth 3 -type f -name manifest.json -print0 2>/dev/null)
     }
 
     find_signed_bundles() {
@@ -918,17 +962,17 @@ pkgs.writeShellApplication {
       fi
     }
 
-    root_inventory_bundle_summary_text() {
-      local bundle_dir="$1"
+    root_inventory_summary_text() {
+      local inventory_dir="$1"
       local root_id=""
       local subject=""
       local yubikey_serial=""
 
-      root_id="$(root_inventory_bundle_root_id "$bundle_dir")"
-      subject="$(root_inventory_bundle_subject "$bundle_dir")"
-      yubikey_serial="$(root_inventory_bundle_yubikey_serial "$bundle_dir")"
+      root_id="$(root_inventory_bundle_root_id "$inventory_dir")"
+      subject="$(root_inventory_bundle_subject "$inventory_dir")"
+      yubikey_serial="$(root_inventory_bundle_yubikey_serial "$inventory_dir")"
 
-      printf '%s\n' "Path: $bundle_dir"
+      printf '%s\n' "Path: $inventory_dir"
       if [ -n "$root_id" ]; then
         printf '%s\n' "Root ID: $root_id"
       fi
@@ -937,6 +981,38 @@ pkgs.writeShellApplication {
       fi
       if [ -n "$yubikey_serial" ]; then
         printf '%s\n' "YubiKey serial: $yubikey_serial"
+      fi
+    }
+
+    root_yubikey_identity_summary_text() {
+      local summary_path="$1"
+      local root_id=""
+      local inventory_serial=""
+      local yubikey_serial=""
+      local certificate_match=""
+      local public_key_match=""
+
+      root_id="$(root_yubikey_identity_summary_root_id "$summary_path")"
+      inventory_serial="$(root_yubikey_identity_summary_inventory_serial "$summary_path")"
+      yubikey_serial="$(root_yubikey_identity_summary_yubikey_serial "$summary_path")"
+      certificate_match="$(root_yubikey_identity_summary_certificate_match "$summary_path")"
+      public_key_match="$(root_yubikey_identity_summary_public_key_match "$summary_path")"
+
+      printf '%s\n' "Summary: $summary_path"
+      if [ -n "$root_id" ]; then
+        printf '%s\n' "Root ID: $root_id"
+      fi
+      if [ -n "$inventory_serial" ]; then
+        printf '%s\n' "Inventory serial: $inventory_serial"
+      fi
+      if [ -n "$yubikey_serial" ]; then
+        printf '%s\n' "Inserted serial: $yubikey_serial"
+      fi
+      if [ -n "$certificate_match" ]; then
+        printf '%s\n' "Certificate match: $certificate_match"
+      fi
+      if [ -n "$public_key_match" ]; then
+        printf '%s\n' "Verified public key match: $public_key_match"
       fi
     }
 
@@ -1358,18 +1434,249 @@ pkgs.writeShellApplication {
       divider
     }
 
-    show_root_inventory_bundle_summary() {
-      local bundle_dir="$1"
+    show_root_inventory_summary() {
+      local inventory_dir="$1"
 
       if ui_is_dialog; then
-        dialog_info "Root Inventory Bundle Summary" "$(root_inventory_bundle_summary_text "$bundle_dir")"
+        dialog_info "Root Inventory Summary" "$(root_inventory_summary_text "$inventory_dir")"
         return 0
       fi
 
       divider
-      printf '%s\n' "Selected root inventory bundle"
-      root_inventory_bundle_summary_text "$bundle_dir"
+      printf '%s\n' "Selected root inventory"
+      root_inventory_summary_text "$inventory_dir"
       divider
+    }
+
+    show_root_yubikey_identity_summary() {
+      local summary_path="$1"
+
+      if ui_is_dialog; then
+        dialog_info "Root CA YubiKey Verified" "$(root_yubikey_identity_summary_text "$summary_path")"
+        return 0
+      fi
+
+      divider
+      printf '%s\n' "Root CA YubiKey verified"
+      root_yubikey_identity_summary_text "$summary_path"
+      divider
+    }
+
+    choose_root_inventory_dir() {
+      local root_dir="$1"
+      local choice=""
+      local selected_line=""
+      local inventory_dir=""
+      local root_id=""
+      local subject=""
+      local yubikey_serial=""
+      local subject_display=""
+      local yubikey_serial_display=""
+      local -a inventory_lines=()
+      local -a menu_items=()
+
+      while true; do
+        mapfile -t inventory_lines < <(find_root_inventory_dirs "$root_dir")
+
+        if [ "''${#inventory_lines[@]}" -eq 0 ]; then
+          if ui_is_dialog; then
+            if dialog_run --title "No Root Inventory Found" --yesno "No committed root inventory entries were found under:\n$root_dir\n\nChoose Yes to refresh after copying inventory files.\nChoose No to enter a directory manually." 16 90; then
+              continue
+            fi
+            inventory_dir="$(prompt_existing_dir "Root inventory directory" "$root_dir" "required")" || return 1
+            printf '%s' "$inventory_dir"
+            return 0
+          fi
+
+          print_header
+          printf '%s\n' "No committed root inventory entries were found under $root_dir."
+          printf '%s' "Choose [m]anual directory, [r]efresh, or [q]uit: " >&2
+          IFS= read -r choice
+          case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+            q) return 1 ;;
+            r|"") continue ;;
+            m)
+              inventory_dir="$(prompt_existing_dir "Root inventory directory" "$root_dir" "required")" || return 1
+              printf '%s' "$inventory_dir"
+              return 0
+              ;;
+            *)
+              printf '%s\n' "Please choose m, r, or q." >&2
+              ;;
+          esac
+          continue
+        fi
+
+        if ui_is_dialog; then
+          menu_items=()
+          local index="1"
+          for selected_line in "''${inventory_lines[@]}"; do
+            IFS=$'\t' read -r inventory_dir root_id subject yubikey_serial <<< "$selected_line"
+            subject_display="$subject"
+            yubikey_serial_display="$yubikey_serial"
+            if [ -z "$subject_display" ]; then
+              subject_display="subject unavailable"
+            fi
+            if [ -z "$yubikey_serial_display" ]; then
+              yubikey_serial_display="serial unavailable"
+            fi
+            menu_items+=("$index" "$root_id | $subject_display | serial $yubikey_serial_display")
+            index=$((index + 1))
+          done
+          menu_items+=("m" "Enter a root inventory directory manually")
+          menu_items+=("r" "Refresh inventory list")
+          choice="$(dialog_run --title "Choose Root Inventory" --menu "Choose the committed root inventory entry that should authorize this root signing ceremony." 22 110 "$(dialog_menu_height)" "''${menu_items[@]}")" || return 1
+          case "$choice" in
+            r)
+              continue
+              ;;
+            m)
+              inventory_dir="$(prompt_existing_dir "Root inventory directory" "$root_dir" "required")" || return 1
+              printf '%s' "$inventory_dir"
+              return 0
+              ;;
+            *)
+              selected_line="''${inventory_lines[$((choice - 1))]}"
+              IFS=$'\t' read -r inventory_dir root_id subject yubikey_serial <<< "$selected_line"
+              printf '%s' "$inventory_dir"
+              return 0
+              ;;
+          esac
+        fi
+
+        print_header
+        printf '%s\n' "Committed root inventory entries under $root_dir:"
+        local index="1"
+        for selected_line in "''${inventory_lines[@]}"; do
+          IFS=$'\t' read -r inventory_dir root_id subject yubikey_serial <<< "$selected_line"
+          printf '%s\n' "  $index. $inventory_dir"
+          printf '%s\n' "     root id: $root_id"
+          if [ -n "$subject" ]; then
+            printf '%s\n' "     subject: $subject"
+          fi
+          if [ -n "$yubikey_serial" ]; then
+            printf '%s\n' "     YubiKey serial: $yubikey_serial"
+          fi
+          index=$((index + 1))
+        done
+
+        printf '%s' "Select a root inventory number, [m]anual directory, [r]efresh, or [q]uit: " >&2
+        IFS= read -r choice
+        case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+          q) return 1 ;;
+          r|"") continue ;;
+          m)
+            inventory_dir="$(prompt_existing_dir "Root inventory directory" "$root_dir" "required")" || return 1
+            printf '%s' "$inventory_dir"
+            return 0
+            ;;
+          *[!0-9]*)
+            printf '%s\n' "Please choose a number, m, r, or q." >&2
+            ;;
+          *)
+            if [ "$choice" -lt 1 ] || [ "$choice" -gt "''${#inventory_lines[@]}" ]; then
+              printf '%s\n' "That selection is out of range." >&2
+              continue
+            fi
+            selected_line="''${inventory_lines[$((choice - 1))]}"
+            IFS=$'\t' read -r inventory_dir root_id subject yubikey_serial <<< "$selected_line"
+            printf '%s' "$inventory_dir"
+            return 0
+            ;;
+        esac
+      done
+    }
+
+    choose_yubikey_serial() {
+      local choice=""
+      local serial=""
+      local -a serials=()
+      local -a menu_items=()
+
+      while true; do
+        mapfile -t serials < <(detect_yubikey_serials)
+
+        if [ "''${#serials[@]}" -eq 1 ]; then
+          printf '%s' "''${serials[0]}"
+          return 0
+        fi
+
+        if [ "''${#serials[@]}" -eq 0 ]; then
+          serial="$(prompt_text "YubiKey serial" "")" || return 1
+          if [ -n "$serial" ]; then
+            printf '%s' "$serial"
+            return 0
+          fi
+          if ui_is_dialog; then
+            dialog_info "Missing YubiKey Serial" "A YubiKey serial is required for root identity verification."
+          else
+            printf '%s\n' "A YubiKey serial is required for root identity verification." >&2
+          fi
+          continue
+        fi
+
+        if ui_is_dialog; then
+          menu_items=()
+          local index="1"
+          for serial in "''${serials[@]}"; do
+            menu_items+=("$index" "$serial")
+            index=$((index + 1))
+          done
+          menu_items+=("m" "Enter a YubiKey serial manually")
+          menu_items+=("r" "Refresh detected YubiKeys")
+          choice="$(dialog_run --title "Choose YubiKey Serial" --menu "Choose the inserted YubiKey serial for root identity verification." 20 90 "$(dialog_menu_height)" "''${menu_items[@]}")" || return 1
+          case "$choice" in
+            r)
+              continue
+              ;;
+            m)
+              serial="$(prompt_text "YubiKey serial" "")" || return 1
+              ;;
+            *)
+              serial="''${serials[$((choice - 1))]}"
+              ;;
+          esac
+        else
+          print_header
+          printf '%s\n' "Detected YubiKey serials:"
+          local index="1"
+          for serial in "''${serials[@]}"; do
+            printf '%s\n' "  $index. $serial"
+            index=$((index + 1))
+          done
+          printf '%s' "Select a serial number, [m]anual entry, [r]efresh, or [q]uit: " >&2
+          IFS= read -r choice
+          case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+            q) return 1 ;;
+            r|"") continue ;;
+            m)
+              serial="$(prompt_text "YubiKey serial" "")" || return 1
+              ;;
+            *[!0-9]*)
+              printf '%s\n' "Please choose a number, m, r, or q." >&2
+              continue
+              ;;
+            *)
+              if [ "$choice" -lt 1 ] || [ "$choice" -gt "''${#serials[@]}" ]; then
+                printf '%s\n' "That selection is out of range." >&2
+                continue
+              fi
+              serial="''${serials[$((choice - 1))]}"
+              ;;
+          esac
+        fi
+
+        if [ -n "$serial" ]; then
+          printf '%s' "$serial"
+          return 0
+        fi
+
+        if ui_is_dialog; then
+          dialog_info "Missing YubiKey Serial" "A YubiKey serial is required for root identity verification."
+        else
+          printf '%s\n' "A YubiKey serial is required for root identity verification." >&2
+        fi
+      done
     }
 
     export_root_inventory_flow() {
@@ -1407,7 +1714,7 @@ pkgs.writeShellApplication {
         printf '%s\n' "Root inventory bundle exported."
         printf '%s\n' "Saved to: $destination_dir"
       fi
-      show_root_inventory_bundle_summary "$destination_dir"
+      show_root_inventory_summary "$destination_dir"
       pause
     }
 
@@ -1454,6 +1761,7 @@ pkgs.writeShellApplication {
     sign_request_flow() {
       local usb_mount=""
       local request_dir=""
+      local request_role=""
       local issuer_profile=""
       local signer_backend=""
       local issuer_key=""
@@ -1470,12 +1778,20 @@ pkgs.writeShellApplication {
       local approval_note=""
       local days=""
       local stage_dir="$temp_root/sign-request"
+      local verify_work_dir="$temp_root/verify-root-yubikey"
       local destination_dir=""
       local bundle_name=""
+      local root_identity_verification_required=0
+      local policy_file_default=""
+      local root_inventory_root=""
+      local root_inventory_dir=""
+      local root_yubikey_serial=""
+      local sign_confirmation=""
       local -a sign_cmd=()
 
       usb_mount="$(choose_usb_mount "write" "Choose the removable volume that holds the request bundle and should receive the signed result.")" || return 0
       request_dir="$(choose_request_bundle_from_mount "$usb_mount")" || return 0
+      request_role="$(request_bundle_role "$request_dir")"
       show_request_bundle_summary "$request_dir"
 
       issuer_profile="$(choose_issuer_profile)" || return 0
@@ -1487,10 +1803,13 @@ pkgs.writeShellApplication {
       else
         issuer_key="$(prompt_existing_file "Issuer key path" "$(issuer_default_key_path "$issuer_profile")" "required")"
       fi
+      if [ "$request_role" = "intermediate-signing-authority" ] && [ "$issuer_profile" = "root" ]; then
+        policy_file_default="''${ROOT_POLICY_FILE:-}"
+      fi
       issuer_cert="$(prompt_existing_file "Issuer certificate path" "$(issuer_default_cert_path "$issuer_profile")" "required")"
       issuer_chain="$(prompt_existing_file "Issuer chain path (optional for roots)" "$(issuer_default_chain_path "$issuer_profile")" "optional")"
       signer_state_dir="$(prompt_existing_dir "Signer state directory" "$(issuer_default_signer_state_dir "$issuer_profile")" "required")"
-      policy_file="$(prompt_existing_file "Signer policy file" "" "required")"
+      policy_file="$(prompt_existing_file "Signer policy file" "$policy_file_default" "required")"
       approved_by="$(prompt_text "Approved by" "$(default_operator_id)")"
       approval_ticket="$(prompt_text "Approval ticket (optional)" "")"
       approval_note="$(prompt_text "Approval note (optional)" "")"
@@ -1509,7 +1828,19 @@ pkgs.writeShellApplication {
         done
       fi
 
-      if ! prompt_yes_no "Proceed to sign this bundle with $(issuer_profile_title "$issuer_profile") using $(signer_backend_title "$signer_backend")?" "y"; then
+      if [ "$request_role" = "intermediate-signing-authority" ] && [ "$issuer_profile" = "root" ] && [ "$signer_backend" = "pkcs11" ]; then
+        root_identity_verification_required=1
+        root_inventory_root="''${ROOT_INVENTORY_ROOT:-/home/operator/inventory/root-ca}"
+        root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
+        root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
+        show_root_inventory_summary "$root_inventory_dir"
+        root_yubikey_serial="$(choose_yubikey_serial)" || return 0
+        sign_confirmation="Proceed to verify the inserted root CA YubiKey against committed root inventory and sign this intermediate request bundle with $(issuer_profile_title "$issuer_profile") using $(signer_backend_title "$signer_backend")?"
+      else
+        sign_confirmation="Proceed to sign this bundle with $(issuer_profile_title "$issuer_profile") using $(signer_backend_title "$signer_backend")?"
+      fi
+
+      if ! prompt_yes_no "$sign_confirmation" "y"; then
         return 0
       fi
 
@@ -1519,6 +1850,24 @@ pkgs.writeShellApplication {
         pkcs11_pin_file="$temp_root/pkcs11-pin-sign-$(current_timestamp_utc).txt"
         write_secret_file "$pkcs11_pin_file" "$pkcs11_pin"
         unset pkcs11_pin
+      fi
+
+      if [ "$root_identity_verification_required" = "1" ]; then
+        rm -rf "$verify_work_dir"
+        mkdir -p "$verify_work_dir"
+        if ui_is_dialog; then
+          dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Verifying Root CA YubiKey" --infobox "Verifying the inserted root CA YubiKey against:\n$root_inventory_dir\n\nYubiKey serial: $root_yubikey_serial" 14 90
+        else
+          print_header
+          printf '%s\n' "Verifying the inserted root CA YubiKey against $root_inventory_dir"
+          printf '%s\n' "YubiKey serial: $root_yubikey_serial"
+        fi
+        pd-pki-signing-tools verify-root-yubikey-identity \
+          --inventory-dir "$root_inventory_dir" \
+          --yubikey-serial "$root_yubikey_serial" \
+          --pin-file "$pkcs11_pin_file" \
+          --work-dir "$verify_work_dir"
+        show_root_yubikey_identity_summary "$verify_work_dir/root-yubikey-identity-summary.json"
       fi
 
       sign_cmd=(

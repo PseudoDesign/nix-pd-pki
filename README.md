@@ -526,6 +526,7 @@ The current wizard supports both file-backed and token-backed signing flows:
 
 - in an interactive terminal it uses a full-screen `dialog` interface and live wait screens that refresh while USB media or a YubiKey is being inserted
 - operators can choose either a PEM issuer key path or a YubiKey / PKCS#11 signer backend for request signing and CRL generation
+- when signing an intermediate request with the root PKCS#11 profile, the wizard requires committed root inventory selection and runs `verify-root-yubikey-identity` before signing continues
 - the PKCS#11 flow defaults to YubiKey PIV's `libykcs11.so`, can discover token certificate objects with `pkcs11-tool`, and always offers manual URI entry as a fallback
 - the wizard still prompts for a local issuer certificate and optional chain path so it can verify returned certificates and assemble bundles
 - removable-volume auto-detection uses `lsblk` when available and always offers a manual mounted-path fallback

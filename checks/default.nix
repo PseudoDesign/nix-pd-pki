@@ -3,6 +3,7 @@
   definitions,
   packages,
   nixosModules,
+  rpi5RootCa,
 }:
 let
   inherit (pkgs.lib) listToAttrs;
@@ -33,6 +34,44 @@ let
     inherit pkgs definitions packages nixosModules;
   };
 
+  # Keep the appliance-specific interface lockdown checked in the same tracked
+  # file as the other shared flake checks so evaluation does not depend on git
+  # staging newly added check files.
+  rpi5RootCaHardeningCheck =
+    let
+      cfg = rpi5RootCa.config;
+      expectedBlacklistedKernelModules = [
+        "bluetooth"
+        "brcmfmac"
+        "brcmutil"
+        "btbcm"
+        "cfg80211"
+        "hci_uart"
+      ];
+      expectedUsbGuardRules = ''
+        allow id 1050:*
+        allow with-interface one-of { 08:*:* }
+        allow with-interface one-of { 03:01:01 }
+      '';
+      # Assert the image still disables the onboard radios and only admits the
+      # USB device classes needed for the offline signing workflow.
+      hardeningChecksPassed =
+        cfg.networking.networkmanager.enable == false
+        && cfg.networking.wireless.enable == false
+        && cfg.hardware.bluetooth.enable == false
+        && builtins.all (module: builtins.elem module cfg.boot.blacklistedKernelModules) expectedBlacklistedKernelModules
+        && cfg.hardware.raspberry-pi.config.all.dt-overlays.disable-bt.enable
+        && cfg.hardware.raspberry-pi.config.all.dt-overlays.disable-wifi.enable
+        && cfg.services.usbguard.enable
+        && cfg.services.usbguard.implicitPolicyTarget == "reject"
+        && cfg.services.usbguard.rules == expectedUsbGuardRules;
+    in
+    assert hardeningChecksPassed;
+    pkgs.runCommand "pd-pki-rpi5-root-ca-hardening-check" { } ''
+      printf '%s\n' "[rpi5-root-ca-hardening] root CA image hardening configuration present"
+      touch "$out"
+    '';
+
   sharedChecks = listToAttrs [
     {
       name = "module-runtime-artifacts";
@@ -45,6 +84,10 @@ let
       value = import ./openvpn-daemon.nix {
         inherit pkgs packages nixosModules;
       };
+    }
+    {
+      name = "rpi5-root-ca-hardening";
+      value = rpi5RootCaHardeningCheck;
     }
     {
       name = "role-topology";

@@ -160,7 +160,9 @@ Operational defaults for this appliance:
   `openssl`, `jq`, `opensc`, and `yubikey-manager`
 - exports `/etc/pd-pki/root-yubikey-init-profile.json` for the root YubiKey
   ceremony
-- disables SSH, NetworkManager, and wireless configuration
+- disables SSH, NetworkManager, onboard Wi-Fi, and onboard Bluetooth
+- rejects USB devices by default with `usbguard`, allowing only YubiKeys,
+  USB mass-storage devices, and boot-keyboard-class HID interfaces
 - enables local console autologin for the `operator` account by default for
   first-boot usability; review and harden that policy before production use
 

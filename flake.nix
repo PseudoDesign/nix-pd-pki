@@ -20,6 +20,7 @@
         [
           "module-runtime-artifacts"
           "openvpn-daemon"
+          "rpi5-root-ca-hardening"
           "role-topology"
           "pd-pki"
         ]
@@ -77,7 +78,7 @@
           };
         in
         import ./checks {
-          inherit pkgs definitions packages nixosModules;
+          inherit pkgs definitions packages nixosModules rpi5RootCa;
         }
       );
 

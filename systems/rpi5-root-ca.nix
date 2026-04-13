@@ -4,6 +4,23 @@ let
   pdPkiPackages = import ../packages {
     inherit pkgs definitions;
   };
+  # Keep the radio stacks unavailable even if userspace packages or services
+  # are reintroduced later.
+  disabledRadioKernelModules = [
+    "bluetooth"
+    "brcmfmac"
+    "brcmutil"
+    "btbcm"
+    "cfg80211"
+    "hci_uart"
+  ];
+  # Permit only the operator workflows this appliance depends on: YubiKeys,
+  # removable storage for bundle handoff, and a plain USB keyboard.
+  usbGuardRules = ''
+    allow id 1050:*
+    allow with-interface one-of { 08:*:* }
+    allow with-interface one-of { 03:01:01 }
+  '';
 in
 {
   imports =
@@ -19,6 +36,9 @@ in
   image.baseName = lib.mkForce "pd-pki-rpi5-root-ca";
 
   boot.loader.raspberry-pi.bootloader = "kernel";
+  # Layer the kernel blacklist on top of the firmware overlays below so the
+  # onboard radios stay disabled even if one control plane changes.
+  boot.blacklistedKernelModules = disabledRadioKernelModules;
 
   networking.hostName = "rpi5-root-ca";
   networking.useDHCP = lib.mkForce false;
@@ -33,7 +53,23 @@ in
   services.openssh.enable = false;
   services.avahi.enable = false;
   services.pcscd.enable = true;
+  services.usbguard = {
+    enable = true;
+    implicitPolicyTarget = "reject";
+    rules = usbGuardRules;
+  };
   hardware.bluetooth.enable = false;
+  # Disable the onboard Wi-Fi/Bluetooth devices before userspace starts.
+  hardware.raspberry-pi.config.all.dt-overlays = {
+    disable-bt = {
+      enable = true;
+      params = { };
+    };
+    disable-wifi = {
+      enable = true;
+      params = { };
+    };
+  };
 
   services.getty.autologinUser = "operator";
 

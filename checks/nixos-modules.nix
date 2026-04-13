@@ -111,6 +111,16 @@ let
         "pd-pki/${role.id}"
         "source"
       ] evaluated.config;
+      yubiKeyProfileSource =
+        if role.id == "root-certificate-authority" then
+          getAttrFromPath [
+            "environment"
+            "etc"
+            cfg.yubiKeyProfileEtcPath
+            "source"
+          ] evaluated.config
+        else
+          null;
       runtimePathDirectory = cfg.runtimePaths.directory;
       packagePaths = map toString evaluated.config.environment.systemPackages;
       expectedPackage = toString packages.${role.id};
@@ -122,6 +132,12 @@ let
         && toString cfg.package == expectedPackage
         && toString etcSource == expectedPackage
         && builtins.match "/var/lib/pd-pki/.*" runtimePathDirectory != null
+        && (if role.id == "root-certificate-authority" then
+          cfg.yubiKeyProfile.roleId == role.id
+          && cfg.yubiKeyProfilePath == "/etc/${cfg.yubiKeyProfileEtcPath}"
+          && yubiKeyProfileSource != null
+        else
+          true)
         && builtins.hasAttr serviceName evaluated.config.systemd.services
         && builtins.elem expectedPackage packagePaths;
     in
@@ -166,11 +182,27 @@ let
             "pd-pki/${role.id}"
             "source"
           ] evaluatedDefaultModule.config;
+          yubiKeyProfileSource =
+            if role.id == "root-certificate-authority" then
+              getAttrFromPath [
+                "environment"
+                "etc"
+                cfg.yubiKeyProfileEtcPath
+                "source"
+              ] evaluatedDefaultModule.config
+            else
+              null;
           serviceName = roleServiceNames.${role.id};
         in
         cfg.enable
         && toString etcSource == toString packages.${role.id}
         && builtins.match "/var/lib/pd-pki/.*" cfg.runtimePaths.directory != null
+        && (if role.id == "root-certificate-authority" then
+          cfg.yubiKeyProfile.roleId == role.id
+          && cfg.yubiKeyProfilePath == "/etc/${cfg.yubiKeyProfileEtcPath}"
+          && yubiKeyProfileSource != null
+        else
+          true)
         && builtins.hasAttr serviceName evaluatedDefaultModule.config.systemd.services
       )
       definitions.roles;

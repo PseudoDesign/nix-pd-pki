@@ -7,6 +7,22 @@ let
     packagePath = ../packages/root-certificate-authority.nix;
   };
   cfg = config.services.pd-pki.roles.rootCertificateAuthority;
+  resolvedYubiKeyProfile = {
+    schemaVersion = 1;
+    profileKind = "root-yubikey-initialization";
+    roleId = "root-certificate-authority";
+    subject = cfg.yubiKey.subject;
+    validityDays = cfg.yubiKey.validityDays;
+    slot = cfg.yubiKey.slot;
+    algorithm = cfg.yubiKey.algorithm;
+    pinPolicy = cfg.yubiKey.pinPolicy;
+    touchPolicy = cfg.yubiKey.touchPolicy;
+    pkcs11ModulePath = cfg.yubiKey.pkcs11ModulePath;
+    pkcs11ProviderDirectory = cfg.yubiKey.pkcs11ProviderDirectory;
+    certificateInstallPath = cfg.yubiKey.certificateInstallPath;
+    archiveBaseDirectory = cfg.yubiKey.archiveBaseDirectory;
+  };
+  yubiKeyProfileFile = pkgs.writeText "pd-pki-root-yubikey-init-profile.json" (builtins.toJSON resolvedYubiKeyProfile);
   refreshInputs = builtins.filter (value: value != null) [
     cfg.keySourcePath
     cfg.keyCredentialPath
@@ -158,6 +174,125 @@ in
       '';
     };
 
+    yubiKey = lib.mkOption {
+      description = ''
+        Declarative, non-secret YubiKey initialization profile for the offline root CA ceremony.
+        The module exports this profile as machine-readable JSON for future operator tooling.
+      '';
+      default = { };
+      type = lib.types.submodule {
+        options = {
+          subject = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.subject;
+            description = ''
+              Root subject in OpenSSL slash format for the YubiKey-backed root certificate.
+            '';
+          };
+
+          validityDays = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = builtins.fromJSON runtimeDefaults.root.days;
+            description = ''
+              Root certificate validity period in days for YubiKey initialization.
+            '';
+          };
+
+          slot = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.slot;
+            description = ''
+              PIV slot to use for the root signing key during YubiKey initialization.
+            '';
+          };
+
+          algorithm = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.algorithm;
+            description = ''
+              YubiKey PIV key algorithm to request when generating the root signing key.
+            '';
+          };
+
+          pinPolicy = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.pinPolicy;
+            description = ''
+              PIN policy to set on the root signing key during YubiKey initialization.
+            '';
+          };
+
+          touchPolicy = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.touchPolicy;
+            description = ''
+              Touch policy to set on the root signing key during YubiKey initialization.
+            '';
+          };
+
+          pkcs11ModulePath = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.pkcs11ModulePath;
+            description = ''
+              PKCS#11 module path that the offline root tooling should use for the YubiKey token.
+            '';
+          };
+
+          pkcs11ProviderDirectory = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.pkcs11ProviderDirectory;
+            description = ''
+              OpenSSL provider directory that exposes `pkcs11prov` for the offline root tooling.
+            '';
+          };
+
+          certificateInstallPath = lib.mkOption {
+            type = lib.types.str;
+            default = runtimePaths.certificate;
+            description = ''
+              Destination where the initialized root certificate should be installed for repo use.
+            '';
+          };
+
+          archiveBaseDirectory = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.root.archiveBaseDirectory;
+            description = ''
+              Base directory where public YubiKey initialization artifacts should be archived.
+            '';
+          };
+        };
+      };
+    };
+
+    yubiKeyProfileEtcPath = lib.mkOption {
+      type = lib.types.str;
+      default = "pd-pki/root-yubikey-init-profile.json";
+      description = ''
+        Relative path under `/etc` where the exported root YubiKey initialization profile JSON is
+        published.
+      '';
+    };
+
+    yubiKeyProfilePath = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      default = "/etc/${cfg.yubiKeyProfileEtcPath}";
+      description = ''
+        Absolute path to the exported root YubiKey initialization profile JSON.
+      '';
+    };
+
+    yubiKeyProfile = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = resolvedYubiKeyProfile;
+      description = ''
+        Resolved machine-readable root YubiKey initialization profile derived from the NixOS
+        configuration.
+      '';
+    };
+
     generateRuntimeSecrets = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -301,6 +436,7 @@ in
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
       assertions = sourceConflictAssertions;
+      environment.etc.${cfg.yubiKeyProfileEtcPath}.source = yubiKeyProfileFile;
     }
     (lib.mkIf cfg.generateRuntimeSecrets {
       systemd.services.pd-pki-root-certificate-authority-init = {

@@ -7,9 +7,17 @@ in
   root = {
     basename = "root-ca";
     commonName = "Pseudo Design Runtime Root CA";
+    subject = "/CN=Pseudo Design Runtime Root CA";
     serial = "7001";
     days = "3650";
     pathLen = "1";
+    slot = "9c";
+    algorithm = "ECCP384";
+    pinPolicy = "always";
+    touchPolicy = "always";
+    pkcs11ModulePath = "/run/current-system/sw/lib/libykcs11.so";
+    pkcs11ProviderDirectory = "/run/current-system/sw/lib/ossl-module";
+    archiveBaseDirectory = "${baseStateDir}/yubikey-inventory";
     stateDir = "${baseStateDir}/authorities/root";
   };
 

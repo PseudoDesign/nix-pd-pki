@@ -24,6 +24,26 @@ pkgs.writeShellApplication {
       command -v "$1" >/dev/null 2>&1 || die "Required command not found in PATH: $1"
     }
 
+    require_executable() {
+      [ -x "$1" ] || die "Required executable not found or not executable: $1"
+    }
+
+    require_ykman_command() {
+      if [ -n "''${PD_PKI_YKMAN_BIN:-}" ]; then
+        require_executable "$PD_PKI_YKMAN_BIN"
+      else
+        require_command ykman
+      fi
+    }
+
+    run_ykman() {
+      if [ -n "''${PD_PKI_YKMAN_BIN:-}" ]; then
+        "$PD_PKI_YKMAN_BIN" "$@"
+      else
+        ykman "$@"
+      fi
+    }
+
     require_file() {
       local path="$1"
       [ -f "$path" ] || die "Required file not found: $path"
@@ -179,6 +199,32 @@ pkgs.writeShellApplication {
       [ -d "$path" ] || return 1
       first_entry="$(find "$path" -mindepth 1 -maxdepth 1 -print -quit)"
       [ -n "$first_entry" ]
+    }
+
+    root_yubikey_requires_factory_fresh_state() {
+      cat >&2 <<'EOF'
+Refusing to continue without --force-reset because the YubiKey does not appear factory-fresh. Re-run with --force-reset only if destroy-and-replace is approved, or use the manual YubiKey SOP to inspect and recover the token safely.
+EOF
+      exit 1
+    }
+
+    root_yubikey_piv_info_indicates_initialized() {
+      local piv_info_path="$1"
+
+      awk '
+        /^[[:space:]]*CHUID:[[:space:]]*/ {
+          if ($0 !~ /No data available[[:space:]]*$/) initialized=1
+        }
+        /^[[:space:]]*CCC:[[:space:]]*/ {
+          if ($0 !~ /No data available[[:space:]]*$/) initialized=1
+        }
+        /^[[:space:]]*Slot [0-9A-Fa-f][0-9A-Fa-f]:[[:space:]]*$/ {
+          initialized=1
+        }
+        END {
+          exit initialized ? 0 : 1
+        }
+      ' "$piv_info_path"
     }
 
     validate_owner_only_file_permissions() {
@@ -425,18 +471,20 @@ EOF
     write_root_yubikey_init_summary() {
       local target="$1"
       local yubikey_serial="$2"
-      local slot="$3"
-      local routine_key_uri="$4"
-      local certificate_path="$5"
-      local attestation_path="$6"
-      local certificate_install_path="$7"
-      local archive_dir="$8"
-      local profile_path="$9"
-      local reviewed_plan_path="''${10}"
+      local force_reset_applied="$3"
+      local slot="$4"
+      local routine_key_uri="$5"
+      local certificate_path="$6"
+      local attestation_path="$7"
+      local certificate_install_path="$8"
+      local archive_dir="$9"
+      local profile_path="''${10}"
+      local reviewed_plan_path="''${11}"
 
       jq -n \
         --arg completedAt "$(current_timestamp_utc)" \
         --arg yubikeySerial "$yubikey_serial" \
+        --argjson forceResetApplied "$force_reset_applied" \
         --arg slot "$slot" \
         --arg routineKeyUri "$routine_key_uri" \
         --arg certificateInstallPath "$certificate_install_path" \
@@ -455,6 +503,7 @@ EOF
           command: "init-root-yubikey",
           completedAt: $completedAt,
           yubikeySerial: $yubikeySerial,
+          forceResetApplied: $forceResetApplied,
           slot: $slot,
           routineKeyUri: $routineKeyUri,
           profilePath: $profilePath,
@@ -1251,7 +1300,7 @@ EOF
     usage() {
       cat <<'EOF' >&2
 Usage:
-  pd-pki-signing-tools init-root-yubikey [--profile FILE] --yubikey-serial SERIAL --work-dir DIR [--certificate-install-path PATH] [--archive-dir PATH] [--pin-retries N --puk-retries N] [--pin-file FILE --puk-file FILE --management-key-file FILE --force-reset] [--dry-run]
+  pd-pki-signing-tools init-root-yubikey [--profile FILE] --yubikey-serial SERIAL --work-dir DIR [--certificate-install-path PATH] [--archive-dir PATH] [--pin-retries N --puk-retries N] [--pin-file FILE --puk-file FILE --management-key-file FILE [--force-reset]] [--dry-run]
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
   pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR (--issuer-key PATH | --issuer-key-uri URI --pkcs11-module PATH [--pkcs11-pin-file PATH]) --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--approved-by ID] [--approval-ticket ID] [--approval-note TEXT] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
@@ -1466,7 +1515,6 @@ EOF
         return
       fi
 
-      [ "$force_reset" = "1" ] || die "--force-reset is required unless --dry-run is used"
       [ -n "$pin_file" ] || die "--pin-file is required unless --dry-run is used"
       [ -n "$puk_file" ] || die "--puk-file is required unless --dry-run is used"
       [ -n "$management_key_file" ] || die "--management-key-file is required unless --dry-run is used"
@@ -1543,34 +1591,54 @@ EOF
 
       require_file "$pkcs11_module_path"
       [ -d "$pkcs11_provider_directory" ] || die "PKCS#11 provider directory not found: $pkcs11_provider_directory"
-      require_command ykman
-      ykman --device "$yubikey_serial" info > "$device_info_before_path"
-      ykman --device "$yubikey_serial" piv info > "$piv_info_before_path"
-
-      ykman --device "$yubikey_serial" piv reset --force
-      if [ -n "$pin_retries" ]; then
-        ykman --device "$yubikey_serial" piv access set-retries "$pin_retries" "$puk_retries" \
-          --management-key "$default_management_key" \
-          --force
+      require_ykman_command
+      run_ykman --device "$yubikey_serial" info > "$device_info_before_path"
+      run_ykman --device "$yubikey_serial" piv info > "$piv_info_before_path"
+      if [ "$force_reset" = "0" ] && root_yubikey_piv_info_indicates_initialized "$piv_info_before_path"; then
+        root_yubikey_requires_factory_fresh_state
       fi
-      ykman --device "$yubikey_serial" piv access change-pin \
+
+      if [ "$force_reset" = "1" ]; then
+        run_ykman --device "$yubikey_serial" piv reset --force
+      fi
+      if [ -n "$pin_retries" ]; then
+        if ! run_ykman --device "$yubikey_serial" piv access set-retries "$pin_retries" "$puk_retries" \
+          --management-key "$default_management_key" \
+          --force; then
+          [ "$force_reset" = "1" ] || root_yubikey_requires_factory_fresh_state
+          die "Failed to set PIN and PUK retry counters on the YubiKey PIV application"
+        fi
+      fi
+      if ! run_ykman --device "$yubikey_serial" piv access change-pin \
         --pin 123456 \
-        --new-pin "$root_pin"
-      ykman --device "$yubikey_serial" piv access change-puk \
+        --new-pin "$root_pin"; then
+        [ "$force_reset" = "1" ] || root_yubikey_requires_factory_fresh_state
+        die "Failed to change the YubiKey PIN from the factory default"
+      fi
+      if ! run_ykman --device "$yubikey_serial" piv access change-puk \
         --puk 12345678 \
-        --new-puk "$root_puk"
-      ykman --device "$yubikey_serial" piv access change-management-key \
+        --new-puk "$root_puk"; then
+        [ "$force_reset" = "1" ] || root_yubikey_requires_factory_fresh_state
+        die "Failed to change the YubiKey PUK from the factory default"
+      fi
+      if ! run_ykman --device "$yubikey_serial" piv access change-management-key \
         --algorithm aes256 \
         --management-key "$default_management_key" \
         --new-management-key "$root_management_key" \
-        --force
+        --force; then
+        [ "$force_reset" = "1" ] || root_yubikey_requires_factory_fresh_state
+        die "Failed to change the YubiKey management key from the factory default"
+      fi
 
-      ykman --device "$yubikey_serial" piv keys generate "$slot" "$public_key_path" \
+      if ! run_ykman --device "$yubikey_serial" piv keys generate "$slot" "$public_key_path" \
         --management-key "$root_management_key" \
         --algorithm "$ykman_algorithm" \
         --pin-policy "$pin_policy" \
-        --touch-policy "$touch_policy"
-      ykman --device "$yubikey_serial" piv keys attest "$slot" "$attestation_path"
+        --touch-policy "$touch_policy"; then
+        [ "$force_reset" = "1" ] || root_yubikey_requires_factory_fresh_state
+        die "Failed to generate the root signing key on the YubiKey"
+      fi
+      run_ykman --device "$yubikey_serial" piv keys attest "$slot" "$attestation_path"
 
       pin_source_file="$(mktemp "$work_dir/.root-pin.XXXXXX")"
       chmod 600 "$pin_source_file"
@@ -1592,21 +1660,21 @@ EOF
       fi
       rm -f "$pin_source_file"
 
-      ykman --device "$yubikey_serial" piv certificates import "$slot" "$certificate_path" \
+      run_ykman --device "$yubikey_serial" piv certificates import "$slot" "$certificate_path" \
         --management-key "$root_management_key" \
         --pin "$root_pin" \
         --verify \
         --no-update-chuid
-      ykman --device "$yubikey_serial" piv objects generate CHUID \
+      run_ykman --device "$yubikey_serial" piv objects generate CHUID \
         --management-key "$root_management_key" \
         --pin "$root_pin"
-      ykman --device "$yubikey_serial" piv objects generate CCC \
+      run_ykman --device "$yubikey_serial" piv objects generate CCC \
         --management-key "$root_management_key" \
         --pin "$root_pin"
 
-      ykman --device "$yubikey_serial" piv certificates export "$slot" "$token_export_path"
+      run_ykman --device "$yubikey_serial" piv certificates export "$slot" "$token_export_path"
       cmp -s "$certificate_path" "$token_export_path" || die "The certificate exported from the YubiKey does not match the locally generated copy"
-      ykman --device "$yubikey_serial" piv keys export "$slot" "$verified_public_key_path" \
+      run_ykman --device "$yubikey_serial" piv keys export "$slot" "$verified_public_key_path" \
         --verify \
         --pin "$root_pin"
 
@@ -1614,12 +1682,13 @@ EOF
       write_certificate_metadata "$certificate_path" "$metadata_path" "root-ca-yubikey-initialized"
       install -D -m 644 "$certificate_path" "$certificate_install_path"
 
-      ykman --device "$yubikey_serial" info > "$device_info_after_path"
-      ykman --device "$yubikey_serial" piv info > "$piv_info_after_path"
+      run_ykman --device "$yubikey_serial" info > "$device_info_after_path"
+      run_ykman --device "$yubikey_serial" piv info > "$piv_info_after_path"
 
       write_root_yubikey_init_summary \
         "$summary_path" \
         "$yubikey_serial" \
+        "$force_reset" \
         "$slot" \
         "$routine_key_uri" \
         "$certificate_path" \

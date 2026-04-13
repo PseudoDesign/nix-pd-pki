@@ -16,6 +16,11 @@ For manual recovery or investigation, see
 
 This procedure is intentionally destructive-reset based.
 
+If you omit `--force-reset` during apply, the command now uses a guarded
+factory-fresh path instead: it refuses to continue if the token already shows
+PIV objects or if the factory-default credential steps fail. The preferred
+ceremony for destroy-and-replace remains the explicit reset-based flow below.
+
 Use it only when all of the following are true:
 
 1. The token is new, blank, or explicitly approved for destroy-and-replace
@@ -188,7 +193,7 @@ Dry-run is intentionally review-only:
 3. Reuse the same `--work-dir` for the apply step so the reviewed plan remains
    the ceremony record
 
-### 5. Apply The Reset-Based Initialization
+### 5. Apply The Initialization
 
 Once the dry-run output is approved, run the destructive apply step:
 
@@ -201,6 +206,19 @@ pd-pki-signing-tools init-root-yubikey \
   --puk-file "$PUK_FILE" \
   --management-key-file "$MANAGEMENT_KEY_FILE" \
   --force-reset
+```
+
+For a factory-fresh token that should fail instead of reset when unexpected
+state is present, omit `--force-reset`:
+
+```bash
+pd-pki-signing-tools init-root-yubikey \
+  --profile "$PROFILE" \
+  --yubikey-serial "$YK_SERIAL" \
+  --work-dir "$WORKDIR" \
+  --pin-file "$PIN_FILE" \
+  --puk-file "$PUK_FILE" \
+  --management-key-file "$MANAGEMENT_KEY_FILE"
 ```
 
 If approved retry counts are part of the ceremony, include them here too:
@@ -220,18 +238,20 @@ pd-pki-signing-tools init-root-yubikey \
 
 This command performs the following actions:
 
-1. Captures device and PIV state before the reset
-2. Resets the PIV application
-3. Optionally sets PIN and PUK retry counters
-4. Changes the PIN, PUK, and management key from factory defaults
-5. Generates the root signing key on-token
-6. Captures the slot attestation certificate
-7. Creates the self-signed root certificate through the PKCS#11 signer path
-8. Imports the certificate into the configured slot
-9. Generates fresh CHUID and CCC objects
-10. Verifies the exported certificate and public key
-11. Installs the root certificate to the configured runtime path
-12. Archives the generated public artifacts, plan, and summary
+1. Captures device and PIV state before initialization
+2. Resets the PIV application when `--force-reset` is present
+3. Refuses to continue without `--force-reset` if the token already appears
+   initialized
+4. Optionally sets PIN and PUK retry counters
+5. Changes the PIN, PUK, and management key from factory defaults
+6. Generates the root signing key on-token
+7. Captures the slot attestation certificate
+8. Creates the self-signed root certificate through the PKCS#11 signer path
+9. Imports the certificate into the configured slot
+10. Generates fresh CHUID and CCC objects
+11. Verifies the exported certificate and public key
+12. Installs the root certificate to the configured runtime path
+13. Archives the generated public artifacts, plan, and summary
 
 Before the command touches hardware, it also refuses to continue unless all of
 the following are true:
@@ -278,10 +298,11 @@ test -f "$INSTALL_PATH"
 find "$ARCHIVE_DIR" -maxdepth 1 -type f | sort
 ```
 
-Confirm that the summary recorded the reviewed plan path and digest:
+Confirm that the summary recorded the reviewed plan path and digest, and that
+`forceResetApplied` matches the ceremony you intended to run:
 
 ```bash
-jq '.reviewedPlan' "$WORKDIR/root-yubikey-init-summary.json"
+jq '{ forceResetApplied, reviewedPlan }' "$WORKDIR/root-yubikey-init-summary.json"
 ```
 
 ### 7. Cleanup

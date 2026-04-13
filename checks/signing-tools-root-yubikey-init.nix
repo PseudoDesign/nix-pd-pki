@@ -15,9 +15,15 @@ pkgs.runCommand "pd-pki-signing-tools-root-yubikey-init-check"
 
     workdir="$(mktemp -d)"
     trap 'rm -rf "$workdir"' EXIT
+    fake_pkcs11_module="$workdir/libykcs11.so"
+    fake_pkcs11_provider_dir="$workdir/ossl-module"
+    : > "$fake_pkcs11_module"
+    mkdir -p "$fake_pkcs11_provider_dir"
 
-    jq -n '
-      {
+    jq -n \
+      --arg pkcs11ModulePath "$fake_pkcs11_module" \
+      --arg pkcs11ProviderDirectory "$fake_pkcs11_provider_dir" \
+      '{
         schemaVersion: 1,
         profileKind: "root-yubikey-initialization",
         roleId: "root-certificate-authority",
@@ -27,12 +33,11 @@ pkgs.runCommand "pd-pki-signing-tools-root-yubikey-init-check"
         algorithm: "ECCP384",
         pinPolicy: "always",
         touchPolicy: "always",
-        pkcs11ModulePath: "/run/current-system/sw/lib/libykcs11.so",
-        pkcs11ProviderDirectory: "/run/current-system/sw/lib/ossl-module",
+        pkcs11ModulePath: $pkcs11ModulePath,
+        pkcs11ProviderDirectory: $pkcs11ProviderDirectory,
         certificateInstallPath: "/var/lib/pd-pki/authorities/root/root-ca.cert.pem",
         archiveBaseDirectory: "/var/lib/pd-pki/yubikey-inventory"
-      }
-    ' > "$workdir/profile.json"
+      }' > "$workdir/profile.json"
 
     pd-pki-signing-tools init-root-yubikey \
       --profile "$workdir/profile.json" \
@@ -145,6 +150,66 @@ pkgs.runCommand "pd-pki-signing-tools-root-yubikey-init-check"
       exit 1
     fi
     grep -F 'Certificate install path already exists' "$workdir/existing-install.stderr"
+
+    no_reset_dir="$workdir/no-reset-initialized"
+    pd-pki-signing-tools init-root-yubikey \
+      --profile "$workdir/profile.json" \
+      --yubikey-serial 91919191 \
+      --work-dir "$no_reset_dir" \
+      --dry-run
+
+    fakebin="$workdir/fakebin"
+    ykman_log="$workdir/fake-ykman.log"
+    mkdir -p "$fakebin"
+    cat > "$fakebin/ykman" <<'EOF'
+#!/bin/sh
+set -eu
+
+printf '%s\n' "$*" >> "''${YKMAN_LOG:?}"
+
+case "$*" in
+  "--device 91919191 info")
+    cat <<'OUT'
+Device type: YubiKey 5
+Serial number: 91919191
+OUT
+    ;;
+  "--device 91919191 piv info")
+    cat <<'OUT'
+PIV version: 5.7.0
+PIN tries remaining: 3/3
+PUK tries remaining: 3/3
+Management key algorithm: AES256
+CHUID: 3019D4ABCDEF
+CCC: F015A000000116FF
+Slot 9c:
+  Private key type: ECCP384
+OUT
+    ;;
+  *)
+    printf '%s\n' "unexpected ykman invocation: $*" >&2
+    exit 99
+    ;;
+esac
+EOF
+    chmod 755 "$fakebin/ykman"
+
+    if YKMAN_LOG="$ykman_log" PD_PKI_YKMAN_BIN="$fakebin/ykman" pd-pki-signing-tools init-root-yubikey \
+      --profile "$workdir/profile.json" \
+      --yubikey-serial 91919191 \
+      --work-dir "$no_reset_dir" \
+      --pin-file "$workdir/secrets/pin.txt" \
+      --puk-file "$workdir/secrets/puk.txt" \
+      --management-key-file "$workdir/secrets/management-key.txt" \
+      >"$workdir/no-reset-initialized.stdout" 2>"$workdir/no-reset-initialized.stderr"; then
+      printf '%s\n' "[signing-tools-root-yubikey-init] expected apply without --force-reset to reject an initialized token" >&2
+      exit 1
+    fi
+    grep -F 'Refusing to continue without --force-reset because the YubiKey does not appear factory-fresh' "$workdir/no-reset-initialized.stderr"
+    if grep -F 'piv reset --force' "$ykman_log" >/dev/null 2>&1; then
+      printf '%s\n' "[signing-tools-root-yubikey-init] expected no-reset apply refusal to happen before any PIV reset" >&2
+      exit 1
+    fi
 
     printf '%s\n' "[signing-tools-root-yubikey-init] root YubiKey init dry-run check passed"
     touch "$out"

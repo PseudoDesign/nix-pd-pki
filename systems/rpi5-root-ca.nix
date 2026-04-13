@@ -4,6 +4,11 @@ let
   pdPkiPackages = import ../packages {
     inherit pkgs definitions;
   };
+  adamAuthorizedKeys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJMjtOqSWLDq79t/9XljmBrfBVm8deQJdOQmTV7c45Ni adam@malak"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIojZ/xu4CVq5TbY51CMUlRiWnSdkS7ZN9xL10gNrFux black@plagueis"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIDVEuyPwmcEybp5d1/FEbCPOjCfuRZ2vp7tYGqe64mg adamschafer@starkiller"
+  ];
   operatorHome = "/home/operator";
   operatorSecretsDirectory = "${operatorHome}/secrets";
   rootYubiKeyProfilePath = "/etc/pd-pki/root-yubikey-init-profile.json";
@@ -44,7 +49,7 @@ in
   boot.blacklistedKernelModules = disabledRadioKernelModules;
 
   networking.hostName = "rpi5-root-ca";
-  networking.useDHCP = lib.mkForce false;
+  networking.useDHCP = lib.mkForce true;
   networking.networkmanager.enable = false;
   networking.wireless.enable = false;
   networking.firewall.enable = true;
@@ -53,7 +58,14 @@ in
   i18n.defaultLocale = "en_US.UTF-8";
   console.keyMap = "us";
 
-  services.openssh.enable = false;
+  services.openssh = {
+    enable = true;
+    openFirewall = true;
+    settings = {
+      PasswordAuthentication = false;
+      KbdInteractiveAuthentication = false;
+    };
+  };
   services.avahi.enable = false;
   services.pcscd.enable = true;
   services.usbguard = {
@@ -82,6 +94,15 @@ in
     extraGroups = [ "wheel" ];
     createHome = true;
     home = "/home/operator";
+  };
+
+  users.users.adam = {
+    isNormalUser = true;
+    description = "Temporary debug SSH account for Adam Schafer";
+    extraGroups = [ "wheel" ];
+    createHome = true;
+    home = "/home/adam";
+    openssh.authorizedKeys.keys = adamAuthorizedKeys;
   };
 
   security.sudo.wheelNeedsPassword = false;
@@ -134,6 +155,11 @@ in
       2. Run pd-pki-signing-tools init-root-yubikey --dry-run
       3. Review root-yubikey-init-plan.json in the chosen work directory
       4. Run the matching apply command with --force-reset and the secret files
+
+    Temporary debug access is enabled on this image:
+      - wired DHCP networking
+      - OpenSSH on TCP 22
+      - adam account with imported authorized_keys
 
     Local console autologin is enabled for the operator account by default.
     Review and harden the login policy before using this image in production.

@@ -33,6 +33,14 @@ produces public ceremony artifacts.
 Those artifacts are exported to removable media as a provisioning bundle, then
 normalized into a committed repository inventory entry.
 
+The intended developer-machine normalization step is:
+
+```bash
+pd-pki-signing-tools normalize-root-inventory \
+  --source-dir /media/transfer/pd-pki-transfer/root-inventory/root-<root-id>-<timestamp> \
+  --inventory-root ./inventory/root-ca
+```
+
 ### 2. Root CA Intermediate Signing
 
 An offline Raspberry Pi image receives:

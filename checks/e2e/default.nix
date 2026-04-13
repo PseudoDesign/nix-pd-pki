@@ -156,70 +156,11 @@ listToAttrs [
           }
         }' > "$bundle_dir/root-yubikey-init-summary.json"
 
-      inventory_dir="$inventory_root/$root_id"
-      mkdir -p "$inventory_dir"
-      cp "$bundle_dir/root-ca.cert.pem" "$inventory_dir/root-ca.cert.pem"
-      cp "$bundle_dir/root-ca.pub.verified.pem" "$inventory_dir/root-ca.pub.verified.pem"
-      cp "$bundle_dir/root-ca.attestation.cert.pem" "$inventory_dir/root-ca.attestation.cert.pem"
-      cp "$bundle_dir/root-ca.metadata.json" "$inventory_dir/root-ca.metadata.json"
-      cp "$bundle_dir/root-yubikey-init-summary.json" "$inventory_dir/root-yubikey-init-summary.json"
-      cp "$bundle_dir/root-key-uri.txt" "$inventory_dir/root-key-uri.txt"
+      pd-pki-signing-tools normalize-root-inventory \
+        --source-dir "$bundle_dir" \
+        --inventory-root "$inventory_root"
 
-      verified_pub_sha256="$(sha256sum "$inventory_dir/root-ca.pub.verified.pem" | cut -d' ' -f1)"
-      jq -n \
-        --arg rootId "$root_id" \
-        --arg serial "42424242" \
-        --arg slot "9c" \
-        --arg routineKeyUri "$(cat "$inventory_dir/root-key-uri.txt")" \
-        --arg certificatePath "root-ca.cert.pem" \
-        --arg subject "$(certificate_subject "$inventory_dir/root-ca.cert.pem")" \
-        --arg certificateSerial "$(certificate_serial "$inventory_dir/root-ca.cert.pem")" \
-        --arg certificateFingerprint "$(certificate_fingerprint "$inventory_dir/root-ca.cert.pem")" \
-        --arg notBefore "$(certificate_not_before "$inventory_dir/root-ca.cert.pem")" \
-        --arg notAfter "$(certificate_not_after "$inventory_dir/root-ca.cert.pem")" \
-        --arg verifiedPublicKeyPath "root-ca.pub.verified.pem" \
-        --arg verifiedPublicKeySha256 "$verified_pub_sha256" \
-        --arg attestationPath "root-ca.attestation.cert.pem" \
-        --arg attestationFingerprint "$(certificate_fingerprint "$inventory_dir/root-ca.attestation.cert.pem")" \
-        --arg metadataPath "root-ca.metadata.json" \
-        --arg summaryPath "root-yubikey-init-summary.json" \
-        '{
-          schemaVersion: 1,
-          contractKind: "root-ca-inventory",
-          rootId: $rootId,
-          source: {
-            command: "init-root-yubikey",
-            profileKind: "root-yubikey-initialization"
-          },
-          yubiKey: {
-            serial: $serial,
-            slot: $slot,
-            routineKeyUri: $routineKeyUri
-          },
-          certificate: {
-            path: $certificatePath,
-            subject: $subject,
-            serial: $certificateSerial,
-            sha256Fingerprint: $certificateFingerprint,
-            notBefore: $notBefore,
-            notAfter: $notAfter
-          },
-          verifiedPublicKey: {
-            path: $verifiedPublicKeyPath,
-            sha256: $verifiedPublicKeySha256
-          },
-          attestation: {
-            path: $attestationPath,
-            sha256Fingerprint: $attestationFingerprint
-          },
-          metadata: {
-            path: $metadataPath,
-            profile: "root-ca-yubikey-initialized"
-          },
-          ceremony: {
-            summaryPath: $summaryPath
-          }
-        }' > "$inventory_dir/manifest.json"
+      inventory_dir="$inventory_root/$root_id"
 
       test -f "$inventory_dir/manifest.json"
       jq -r '.contractKind' "$inventory_dir/manifest.json" | grep -Fx 'root-ca-inventory'

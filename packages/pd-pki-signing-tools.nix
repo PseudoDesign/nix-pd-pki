@@ -526,6 +526,115 @@ EOF
         }' > "$target"
     }
 
+    normalize_sha256_fingerprint() {
+      local value="$1"
+
+      printf '%s' "$value" | tr -d ':' | tr '[:upper:]' '[:lower:]'
+    }
+
+    validate_root_inventory_summary() {
+      local summary_path="$1"
+      local certificate_path="$2"
+      local attestation_path="$3"
+
+      require_file "$summary_path"
+      jq -e '
+        (.schemaVersion // 0) == 1 and
+        (.command // "") == "init-root-yubikey" and
+        (.yubikeySerial | type == "string" and length > 0) and
+        (.slot | type == "string" and length > 0) and
+        (.routineKeyUri | type == "string" and length > 0) and
+        (.certificate.subject | type == "string" and length > 0) and
+        (.certificate.serial | type == "string" and length > 0) and
+        (.certificate.sha256Fingerprint | type == "string" and length > 0) and
+        (.certificate.notBefore | type == "string" and length > 0) and
+        (.certificate.notAfter | type == "string" and length > 0) and
+        (.attestation.sha256Fingerprint | type == "string" and length > 0)
+      ' "$summary_path" >/dev/null || die "Invalid root YubiKey initialization summary: $summary_path"
+
+      jq -e \
+        --arg subject "$(certificate_subject "$certificate_path")" \
+        --arg serial "$(certificate_serial "$certificate_path")" \
+        --arg sha256Fingerprint "$(certificate_fingerprint "$certificate_path")" \
+        --arg notBefore "$(certificate_not_before "$certificate_path")" \
+        --arg notAfter "$(certificate_not_after "$certificate_path")" \
+        --arg attestationFingerprint "$(certificate_fingerprint "$attestation_path")" \
+        '
+          .certificate.subject == $subject and
+          .certificate.serial == $serial and
+          .certificate.sha256Fingerprint == $sha256Fingerprint and
+          .certificate.notBefore == $notBefore and
+          .certificate.notAfter == $notAfter and
+          .attestation.sha256Fingerprint == $attestationFingerprint
+        ' "$summary_path" >/dev/null || die "Root YubiKey initialization summary does not match the provided certificate artifacts: $summary_path"
+    }
+
+    write_root_inventory_manifest() {
+      local target="$1"
+      local certificate_path="$2"
+      local verified_public_key_path="$3"
+      local attestation_path="$4"
+      local metadata_path="$5"
+      local summary_path="$6"
+      local key_uri_path="$7"
+
+      jq -n \
+        --arg rootId "$(normalize_sha256_fingerprint "$(certificate_fingerprint "$certificate_path")")" \
+        --arg serial "$(jq -r '.yubikeySerial' "$summary_path")" \
+        --arg slot "$(jq -r '.slot' "$summary_path")" \
+        --arg routineKeyUri "$(tr -d '\r\n' < "$key_uri_path")" \
+        --arg certificatePath "$(basename "$certificate_path")" \
+        --arg subject "$(certificate_subject "$certificate_path")" \
+        --arg certificateSerial "$(certificate_serial "$certificate_path")" \
+        --arg certificateFingerprint "$(certificate_fingerprint "$certificate_path")" \
+        --arg notBefore "$(certificate_not_before "$certificate_path")" \
+        --arg notAfter "$(certificate_not_after "$certificate_path")" \
+        --arg verifiedPublicKeyPath "$(basename "$verified_public_key_path")" \
+        --arg verifiedPublicKeySha256 "$(file_sha256 "$verified_public_key_path")" \
+        --arg attestationPath "$(basename "$attestation_path")" \
+        --arg attestationFingerprint "$(certificate_fingerprint "$attestation_path")" \
+        --arg metadataPath "$(basename "$metadata_path")" \
+        --arg metadataProfile "$(jq -r '.profile' "$metadata_path")" \
+        --arg summaryPath "$(basename "$summary_path")" \
+        '{
+          schemaVersion: 1,
+          contractKind: "root-ca-inventory",
+          rootId: $rootId,
+          source: {
+            command: "init-root-yubikey",
+            profileKind: "root-yubikey-initialization"
+          },
+          yubiKey: {
+            serial: $serial,
+            slot: $slot,
+            routineKeyUri: $routineKeyUri
+          },
+          certificate: {
+            path: $certificatePath,
+            subject: $subject,
+            serial: $certificateSerial,
+            sha256Fingerprint: $certificateFingerprint,
+            notBefore: $notBefore,
+            notAfter: $notAfter
+          },
+          verifiedPublicKey: {
+            path: $verifiedPublicKeyPath,
+            sha256: $verifiedPublicKeySha256
+          },
+          attestation: {
+            path: $attestationPath,
+            sha256Fingerprint: $attestationFingerprint
+          },
+          metadata: {
+            path: $metadataPath,
+            profile: $metadataProfile
+          },
+          ceremony: {
+            summaryPath: $summaryPath
+          }
+        }' > "$target"
+    }
+
     certificate_basename_for_role() {
       local role="$1"
       case "$role" in
@@ -1301,6 +1410,7 @@ EOF
       cat <<'EOF' >&2
 Usage:
   pd-pki-signing-tools init-root-yubikey [--profile FILE] --yubikey-serial SERIAL --work-dir DIR [--certificate-install-path PATH] [--archive-dir PATH] [--pin-retries N --puk-retries N] [--pin-file FILE --puk-file FILE --management-key-file FILE [--force-reset]] [--dry-run]
+  pd-pki-signing-tools normalize-root-inventory --source-dir DIR --inventory-root DIR
   pd-pki-signing-tools export-request --role ROLE --state-dir DIR --out-dir DIR
   pd-pki-signing-tools sign-request --request-dir DIR --out-dir DIR (--issuer-key PATH | --issuer-key-uri URI --pkcs11-module PATH [--pkcs11-pin-file PATH]) --issuer-cert PATH [--days DAYS] [--issuer-chain PATH] [--policy-file PATH] [--approved-by ID] [--approval-ticket ID] [--approval-note TEXT] [--serial SERIAL | --signer-state-dir DIR]
   pd-pki-signing-tools import-signed --role ROLE --state-dir DIR --signed-dir DIR
@@ -1720,6 +1830,117 @@ EOF
       printf '%s\n' "Initialized root YubiKey $yubikey_serial using profile: $profile_path"
       printf '%s\n' "Installed certificate to: $certificate_install_path"
       printf '%s\n' "Archived public artifacts to: $archive_dir"
+    }
+
+    normalize_root_inventory() {
+      local source_dir=""
+      local inventory_root=""
+      local certificate_path=""
+      local verified_public_key_path=""
+      local attestation_path=""
+      local metadata_path=""
+      local summary_path=""
+      local key_uri_path=""
+      local routine_key_uri=""
+      local expected_routine_key_uri=""
+      local certificate_pubkey=""
+      local verified_public_key_pem=""
+      local root_id=""
+      local inventory_dir=""
+
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --source-dir)
+            source_dir="$2"
+            shift 2
+            ;;
+          --inventory-root)
+            inventory_root="$2"
+            shift 2
+            ;;
+          *)
+            die "Unknown normalize-root-inventory argument: $1"
+            ;;
+        esac
+      done
+
+      [ -n "$source_dir" ] || die "--source-dir is required"
+      [ -n "$inventory_root" ] || die "--inventory-root is required"
+
+      require_dir "$source_dir"
+      mkdir -p "$inventory_root"
+
+      source_dir="$(canonicalize_path "$source_dir")"
+      inventory_root="$(canonicalize_path "$inventory_root")"
+
+      certificate_path="$source_dir/root-ca.cert.pem"
+      verified_public_key_path="$source_dir/root-ca.pub.verified.pem"
+      attestation_path="$source_dir/root-ca.attestation.cert.pem"
+      metadata_path="$source_dir/root-ca.metadata.json"
+      summary_path="$source_dir/root-yubikey-init-summary.json"
+      key_uri_path="$source_dir/root-key-uri.txt"
+
+      require_file "$certificate_path"
+      require_file "$verified_public_key_path"
+      require_file "$attestation_path"
+      require_file "$metadata_path"
+      require_file "$summary_path"
+      require_file "$key_uri_path"
+
+      certificate_is_ca "$certificate_path" || die "Root inventory certificate must be a CA certificate: $certificate_path"
+      validate_certificate_metadata "$metadata_path" "$certificate_path" || die "Root inventory metadata does not match the certificate: $metadata_path"
+      [ "$(jq -r '.profile // empty' "$metadata_path")" = "root-ca-yubikey-initialized" ] ||
+        die "Root inventory metadata profile must be root-ca-yubikey-initialized: $metadata_path"
+
+      openssl x509 -in "$attestation_path" -noout >/dev/null 2>&1 || die "Failed to parse root attestation certificate: $attestation_path"
+      validate_root_inventory_summary "$summary_path" "$certificate_path" "$attestation_path"
+
+      routine_key_uri="$(tr -d '\r\n' < "$key_uri_path")"
+      [ -n "$routine_key_uri" ] || die "Root inventory key URI file is empty: $key_uri_path"
+      pkcs11_uri_has_pin_directive "$routine_key_uri" && die "Root inventory key URI must not include an embedded PIN directive: $key_uri_path"
+      expected_routine_key_uri="$(root_yubikey_pkcs11_base_uri "$(jq -r '.slot' "$summary_path")")"
+      [ "$routine_key_uri" = "$expected_routine_key_uri" ] || die "Root inventory key URI does not match the slot-derived PKCS#11 URI: $key_uri_path"
+      [ "$routine_key_uri" = "$(jq -r '.routineKeyUri' "$summary_path")" ] || die "Root inventory key URI does not match the initialization summary: $key_uri_path"
+
+      certificate_pubkey="$(certificate_public_key "$certificate_path")"
+      verified_public_key_pem="$(openssl pkey -pubin -in "$verified_public_key_path" -outform pem 2>/dev/null)" ||
+        die "Failed to parse verified root public key: $verified_public_key_path"
+      [ "$certificate_pubkey" = "$verified_public_key_pem" ] ||
+        die "Verified root public key does not match the root certificate: $verified_public_key_path"
+
+      root_id="$(normalize_sha256_fingerprint "$(certificate_fingerprint "$certificate_path")")"
+      inventory_dir="$inventory_root/$root_id"
+      if directory_has_entries "$inventory_dir"; then
+        die "Root inventory destination already exists and is not empty: $inventory_dir"
+      fi
+
+      install -d -m 755 "$inventory_dir"
+      install -m 644 "$certificate_path" "$inventory_dir/root-ca.cert.pem"
+      install -m 644 "$verified_public_key_path" "$inventory_dir/root-ca.pub.verified.pem"
+      install -m 644 "$attestation_path" "$inventory_dir/root-ca.attestation.cert.pem"
+      install -m 644 "$metadata_path" "$inventory_dir/root-ca.metadata.json"
+      install -m 644 "$summary_path" "$inventory_dir/root-yubikey-init-summary.json"
+      install -m 644 "$key_uri_path" "$inventory_dir/root-key-uri.txt"
+      write_root_inventory_manifest \
+        "$inventory_dir/manifest.json" \
+        "$inventory_dir/root-ca.cert.pem" \
+        "$inventory_dir/root-ca.pub.verified.pem" \
+        "$inventory_dir/root-ca.attestation.cert.pem" \
+        "$inventory_dir/root-ca.metadata.json" \
+        "$inventory_dir/root-yubikey-init-summary.json" \
+        "$inventory_dir/root-key-uri.txt"
+
+      jq -e \
+        --arg rootId "$root_id" \
+        '
+          .contractKind == "root-ca-inventory" and
+          .rootId == $rootId and
+          ((.certificate.sha256Fingerprint | ascii_downcase | gsub(":"; "")) == $rootId) and
+          .metadata.profile == "root-ca-yubikey-initialized"
+        ' "$inventory_dir/manifest.json" >/dev/null || die "Generated root inventory manifest failed self-validation: $inventory_dir/manifest.json"
+
+      printf '%s\n' "Normalized root inventory into: $inventory_dir"
+      printf '%s\n' "Root inventory id: $root_id"
     }
 
     export_request() {
@@ -2471,6 +2692,9 @@ EOF
     case "$command" in
       init-root-yubikey)
         init_root_yubikey "$@"
+        ;;
+      normalize-root-inventory)
+        normalize_root_inventory "$@"
         ;;
       export-request)
         export_request "$@"

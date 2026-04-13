@@ -283,6 +283,16 @@ For root signer procedures, see:
 
 For root token provisioning from the exported root profile, `pd-pki-signing-tools init-root-yubikey` can consume `/etc/pd-pki/root-yubikey-init-profile.json`; use `--dry-run` first to review the generated plan and OpenSSL config before touching hardware, then reuse the same `--work-dir` for apply so the reviewed plan remains the ceremony record. Use `--force-reset` for destroy-and-replace ceremonies, or omit it only when a factory-fresh token should fail rather than reset if it already contains PIV state.
 
+After a root ceremony has exported its public bundle to removable media,
+`pd-pki-signing-tools normalize-root-inventory` can normalize the public subset
+into the committed repository contract under `inventory/root-ca/<root-id>/`:
+
+```bash
+pd-pki-signing-tools normalize-root-inventory \
+  --source-dir /media/transfer/pd-pki-transfer/root-inventory/root-<root-id>-<timestamp> \
+  --inventory-root ./inventory/root-ca
+```
+
 Build it with:
 
 ```bash

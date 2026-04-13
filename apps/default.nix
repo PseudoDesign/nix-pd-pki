@@ -47,6 +47,11 @@ let
       description = "Validate the workflow-facing dry-run outputs that seed the root CA YubiKey provisioning contract.";
     }
     {
+      name = "e2e-root-inventory-export-bundle-contract";
+      title = "E2E: Root Inventory Export Bundle";
+      description = "Validate the removable-media root inventory bundle exported from a completed root YubiKey provisioning ceremony.";
+    }
+    {
       name = "e2e-root-yubikey-inventory-normalization";
       title = "E2E: Root Inventory Normalization";
       description = "Validate the normalized public root CA inventory contract that will be committed into the repository.";

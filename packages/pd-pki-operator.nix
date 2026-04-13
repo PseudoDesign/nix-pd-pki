@@ -30,9 +30,9 @@ pkgs.writeShellApplication {
       cat <<'EOF'
     Usage: pd-pki-operator [--poll-seconds SECONDS] [--help]
 
-    Interactive operator TUI for exporting request bundles to removable media,
-    signing request bundles from removable media, importing signed bundles back
-    into runtime state, and exporting CRLs.
+    Interactive operator TUI for exporting root inventory and request bundles
+    to removable media, signing request bundles from removable media, importing
+    signed bundles back into runtime state, and exporting CRLs.
 
     Signing supports either PEM issuer key paths or PKCS#11-backed keys such as
     YubiKey PIV slots. The wizard can discover token certificate objects and
@@ -198,7 +198,7 @@ pkgs.writeShellApplication {
 
       divider
       printf '%s\n' "Pseudo Design PKI Operator"
-      printf '%s\n' "USB-guided request export, signing, import, and CRL handoff"
+      printf '%s\n' "USB-guided root inventory export, request export, signing, import, and CRL handoff"
       printf '%s\n' "YubiKey status: $(yubikey_status_line)"
       divider
     }
@@ -398,6 +398,18 @@ pkgs.writeShellApplication {
 
     signed_bundle_not_after() {
       jq -r '.notAfter // empty' "$1/metadata.json" 2>/dev/null || true
+    }
+
+    root_inventory_bundle_root_id() {
+      jq -r '.rootId // empty' "$1/manifest.json" 2>/dev/null || true
+    }
+
+    root_inventory_bundle_subject() {
+      jq -r '.certificate.subject // empty' "$1/manifest.json" 2>/dev/null || true
+    }
+
+    root_inventory_bundle_yubikey_serial() {
+      jq -r '.yubiKey.serial // empty' "$1/manifest.json" 2>/dev/null || true
     }
 
     find_request_bundles() {
@@ -906,6 +918,28 @@ pkgs.writeShellApplication {
       fi
     }
 
+    root_inventory_bundle_summary_text() {
+      local bundle_dir="$1"
+      local root_id=""
+      local subject=""
+      local yubikey_serial=""
+
+      root_id="$(root_inventory_bundle_root_id "$bundle_dir")"
+      subject="$(root_inventory_bundle_subject "$bundle_dir")"
+      yubikey_serial="$(root_inventory_bundle_yubikey_serial "$bundle_dir")"
+
+      printf '%s\n' "Path: $bundle_dir"
+      if [ -n "$root_id" ]; then
+        printf '%s\n' "Root ID: $root_id"
+      fi
+      if [ -n "$subject" ]; then
+        printf '%s\n' "Subject: $subject"
+      fi
+      if [ -n "$yubikey_serial" ]; then
+        printf '%s\n' "YubiKey serial: $yubikey_serial"
+      fi
+    }
+
     choose_usb_mount() {
       local access_mode="$1"
       local intro="$2"
@@ -1324,6 +1358,59 @@ pkgs.writeShellApplication {
       divider
     }
 
+    show_root_inventory_bundle_summary() {
+      local bundle_dir="$1"
+
+      if ui_is_dialog; then
+        dialog_info "Root Inventory Bundle Summary" "$(root_inventory_bundle_summary_text "$bundle_dir")"
+        return 0
+      fi
+
+      divider
+      printf '%s\n' "Selected root inventory bundle"
+      root_inventory_bundle_summary_text "$bundle_dir"
+      divider
+    }
+
+    export_root_inventory_flow() {
+      local source_dir=""
+      local usb_mount=""
+      local stage_dir="$temp_root/export-root-inventory"
+      local root_id=""
+      local destination_dir=""
+
+      source_dir="$(prompt_existing_dir "Root inventory archive directory" "/var/lib/pd-pki/yubikey-inventory" "required")"
+      usb_mount="$(choose_usb_mount "write" "Choose the removable volume that should receive the root inventory bundle.")" || return 0
+
+      rm -rf "$stage_dir"
+      mkdir -p "$stage_dir"
+
+      if ui_is_dialog; then
+        dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Exporting Root Inventory Bundle" --infobox "Exporting root inventory bundle from:\n$source_dir" 12 80
+      else
+        print_header
+        printf '%s\n' "Exporting root inventory bundle from $source_dir"
+      fi
+      pd-pki-signing-tools export-root-inventory --source-dir "$source_dir" --out-dir "$stage_dir"
+
+      root_id="$(root_inventory_bundle_root_id "$stage_dir")"
+      if [ -z "$root_id" ]; then
+        root_id="root-inventory"
+      fi
+      destination_dir="$(unique_destination_path "$usb_mount/pd-pki-transfer/root-inventory/root-$root_id-$(current_timestamp_utc)")"
+      copy_bundle_dir "$stage_dir" "$destination_dir"
+
+      if ui_is_dialog; then
+        dialog_info "Root Inventory Bundle Exported" "Saved to:\n$destination_dir"
+      else
+        print_header
+        printf '%s\n' "Root inventory bundle exported."
+        printf '%s\n' "Saved to: $destination_dir"
+      fi
+      show_root_inventory_bundle_summary "$destination_dir"
+      pause
+    }
+
     export_request_flow() {
       local role=""
       local state_dir=""
@@ -1610,13 +1697,14 @@ pkgs.writeShellApplication {
 
       if ui_is_dialog; then
         while true; do
-          choice="$(dialog_run --title "Main Menu" --menu "Choose an action.\n\nYubiKey status: $(yubikey_status_line)" 18 90 10 1 "Export request bundle to removable media" 2 "Sign request bundle from removable media" 3 "Import signed bundle from removable media" 4 "Generate CRL bundle to removable media" 5 "Quit")" || exit 0
+          choice="$(dialog_run --title "Main Menu" --menu "Choose an action.\n\nYubiKey status: $(yubikey_status_line)" 20 100 12 1 "Export root inventory bundle to removable media" 2 "Export request bundle to removable media" 3 "Sign request bundle from removable media" 4 "Import signed bundle from removable media" 5 "Generate CRL bundle to removable media" 6 "Quit")" || exit 0
           case "$choice" in
-            1) export_request_flow ;;
-            2) sign_request_flow ;;
-            3) import_signed_flow ;;
-            4) generate_crl_flow ;;
-            5) exit 0 ;;
+            1) export_root_inventory_flow ;;
+            2) export_request_flow ;;
+            3) sign_request_flow ;;
+            4) import_signed_flow ;;
+            5) generate_crl_flow ;;
+            6) exit 0 ;;
           esac
         done
       fi
@@ -1624,21 +1712,23 @@ pkgs.writeShellApplication {
       while true; do
         print_header
         printf '%s\n' "Choose an action."
-        printf '%s\n' "  1. Export request bundle to removable media"
-        printf '%s\n' "  2. Sign request bundle from removable media"
-        printf '%s\n' "  3. Import signed bundle from removable media"
-        printf '%s\n' "  4. Generate CRL bundle to removable media"
-        printf '%s\n' "  5. Quit"
+        printf '%s\n' "  1. Export root inventory bundle to removable media"
+        printf '%s\n' "  2. Export request bundle to removable media"
+        printf '%s\n' "  3. Sign request bundle from removable media"
+        printf '%s\n' "  4. Import signed bundle from removable media"
+        printf '%s\n' "  5. Generate CRL bundle to removable media"
+        printf '%s\n' "  6. Quit"
         printf '%s' "Selection: " >&2
         IFS= read -r choice
 
         case "$choice" in
-          1) export_request_flow ;;
-          2) sign_request_flow ;;
-          3) import_signed_flow ;;
-          4) generate_crl_flow ;;
-          5|q|Q) exit 0 ;;
-          *) printf '%s\n' "Please choose 1, 2, 3, 4, or 5." >&2 ;;
+          1) export_root_inventory_flow ;;
+          2) export_request_flow ;;
+          3) sign_request_flow ;;
+          4) import_signed_flow ;;
+          5) generate_crl_flow ;;
+          6|q|Q) exit 0 ;;
+          *) printf '%s\n' "Please choose 1, 2, 3, 4, 5, or 6." >&2 ;;
         esac
       done
     }

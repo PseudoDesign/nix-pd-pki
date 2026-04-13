@@ -22,6 +22,7 @@
       ];
       e2eCheckNames = [
         "e2e-root-yubikey-provisioning-contract"
+        "e2e-root-inventory-export-bundle-contract"
         "e2e-root-yubikey-inventory-normalization"
         "e2e-root-yubikey-identity-verification"
         "e2e-root-intermediate-request-bundle-contract"
@@ -124,7 +125,7 @@
             type = "app";
             program = "${appPackages.pdPkiOperator}/bin/pd-pki-operator";
             meta = {
-              description = "Run the interactive PKI operator wizard for USB-guided request export, signing, import, and CRL handoff.";
+              description = "Run the interactive PKI operator wizard for USB-guided root inventory export, request export, signing, import, and CRL handoff.";
             };
           };
           test-report = {

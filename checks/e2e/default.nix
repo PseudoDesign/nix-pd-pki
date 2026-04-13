@@ -78,6 +78,109 @@ listToAttrs [
     '';
   }
   {
+    name = "e2e-root-inventory-export-bundle-contract";
+    value = mkE2ECheck "pd-pki-e2e-root-inventory-export-bundle-contract-check" ''
+      set -euo pipefail
+
+      source ${../../packages/pki-workflow-lib.sh}
+
+      printf '%s\n' "[e2e-root-inventory-export-bundle-contract] starting root inventory export bundle contract check"
+
+      workdir="$(mktemp -d)"
+      trap 'rm -rf "$workdir"' EXIT
+
+      archive_dir="$workdir/archive/root-42424242"
+      export_bundle_dir="$workdir/usb/pd-pki-transfer/root-inventory/root-bundle-20260413T000000Z"
+      inventory_root="$workdir/inventory/root-ca"
+      root_fixture="$workdir/root"
+      attestation_fixture="$workdir/attestation"
+
+      generate_self_signed_ca "$root_fixture" "root-ca" "Pseudo Design Workflow Root CA" 9001 7300 1 ec-p384
+      generate_self_signed_ca "$attestation_fixture" "root-attestation" "Pseudo Design Root Attestation" 7001 3650 0 ec-p384
+
+      mkdir -p "$archive_dir"
+      cp "$root_fixture/root-ca.cert.pem" "$archive_dir/root-ca.cert.pem"
+      openssl pkey -in "$root_fixture/root-ca.key.pem" -pubout -outform pem > "$archive_dir/root-ca.pub.verified.pem"
+      cp "$attestation_fixture/root-attestation.cert.pem" "$archive_dir/root-ca.attestation.cert.pem"
+      write_certificate_metadata "$archive_dir/root-ca.cert.pem" "$archive_dir/root-ca.metadata.json" "root-ca-yubikey-initialized"
+      printf '%s\n' 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' > "$archive_dir/root-key-uri.txt"
+
+      fingerprint="$(certificate_fingerprint "$archive_dir/root-ca.cert.pem")"
+      root_id="$(printf '%s' "$fingerprint" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+      jq -n \
+        --arg completedAt "2026-04-13T00:00:00Z" \
+        --arg yubikeySerial "42424242" \
+        --arg slot "9c" \
+        --arg routineKeyUri "$(cat "$archive_dir/root-key-uri.txt")" \
+        --arg certificateInstallPath "/var/lib/pd-pki/authorities/root/root-ca.cert.pem" \
+        --arg archiveDirectory "$archive_dir" \
+        --arg profilePath "/etc/pd-pki/root-yubikey-init-profile.json" \
+        --arg reviewedPlanPath "$archive_dir/root-yubikey-init-plan.json" \
+        --arg reviewedPlanSha256 "deadbeef" \
+        --arg subject "$(certificate_subject "$root_fixture/root-ca.cert.pem")" \
+        --arg serial "$(certificate_serial "$root_fixture/root-ca.cert.pem")" \
+        --arg fingerprint "$fingerprint" \
+        --arg notBefore "$(certificate_not_before "$root_fixture/root-ca.cert.pem")" \
+        --arg notAfter "$(certificate_not_after "$root_fixture/root-ca.cert.pem")" \
+        --arg attestationFingerprint "$(certificate_fingerprint "$attestation_fixture/root-attestation.cert.pem")" \
+        '{
+          schemaVersion: 1,
+          command: "init-root-yubikey",
+          completedAt: $completedAt,
+          yubikeySerial: $yubikeySerial,
+          forceResetApplied: true,
+          slot: $slot,
+          routineKeyUri: $routineKeyUri,
+          profilePath: $profilePath,
+          reviewedPlan: {
+            path: $reviewedPlanPath,
+            sha256: $reviewedPlanSha256
+          },
+          certificateInstallPath: $certificateInstallPath,
+          archiveDirectory: $archiveDirectory,
+          certificate: {
+            subject: $subject,
+            serial: $serial,
+            sha256Fingerprint: $fingerprint,
+            notBefore: $notBefore,
+            notAfter: $notAfter
+          },
+          attestation: {
+            sha256Fingerprint: $attestationFingerprint
+          }
+        }' > "$archive_dir/root-yubikey-init-summary.json"
+
+      pd-pki-signing-tools export-root-inventory \
+        --source-dir "$archive_dir" \
+        --out-dir "$export_bundle_dir"
+
+      test -f "$export_bundle_dir/manifest.json"
+      test -f "$export_bundle_dir/root-ca.cert.pem"
+      test -f "$export_bundle_dir/root-ca.pub.verified.pem"
+      test -f "$export_bundle_dir/root-ca.attestation.cert.pem"
+      test -f "$export_bundle_dir/root-ca.metadata.json"
+      test -f "$export_bundle_dir/root-yubikey-init-summary.json"
+      test -f "$export_bundle_dir/root-key-uri.txt"
+
+      jq -r '.contractKind' "$export_bundle_dir/manifest.json" | grep -Fx 'root-ca-inventory'
+      jq -r '.rootId' "$export_bundle_dir/manifest.json" | grep -Fx "$root_id"
+      jq -r '.yubiKey.serial' "$export_bundle_dir/manifest.json" | grep -Fx '42424242'
+      jq -r '.yubiKey.routineKeyUri' "$export_bundle_dir/manifest.json" | grep -Fx 'pkcs11:token=YubiKey%20PIV;id=%02;type=private'
+
+      pd-pki-signing-tools normalize-root-inventory \
+        --source-dir "$export_bundle_dir" \
+        --inventory-root "$inventory_root"
+
+      normalized_dir="$inventory_root/$root_id"
+      test -f "$normalized_dir/manifest.json"
+      jq -r '.rootId' "$normalized_dir/manifest.json" | grep -Fx "$root_id"
+
+      printf '%s\n' "[e2e-root-inventory-export-bundle-contract] root inventory export bundle contract check passed"
+      touch "$out"
+    '';
+  }
+  {
     name = "e2e-root-yubikey-inventory-normalization";
     value = mkE2ECheck "pd-pki-e2e-root-yubikey-inventory-normalization-check" ''
       set -euo pipefail

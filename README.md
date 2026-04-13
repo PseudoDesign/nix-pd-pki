@@ -303,9 +303,18 @@ For root signer procedures, see:
 
 For root token provisioning from the exported root profile, `pd-pki-signing-tools init-root-yubikey` can consume `/etc/pd-pki/root-yubikey-init-profile.json`; use `--dry-run` first to review the generated plan and OpenSSL config before touching hardware, then reuse the same `--work-dir` for apply so the reviewed plan remains the ceremony record. Use `--force-reset` for destroy-and-replace ceremonies, or omit it only when a factory-fresh token should fail rather than reset if it already contains PIV state.
 
-After a root ceremony has exported its public bundle to removable media,
-`pd-pki-signing-tools normalize-root-inventory` can normalize the public subset
-into the committed repository contract under `inventory/root-ca/<root-id>/`:
+After a root ceremony, `pd-pki-signing-tools export-root-inventory` can turn
+the archived public artifacts into the removable-media root inventory bundle:
+
+```bash
+pd-pki-signing-tools export-root-inventory \
+  --source-dir /var/lib/pd-pki/yubikey-inventory/root-<serial> \
+  --out-dir /media/transfer/pd-pki-transfer/root-inventory/root-<root-id>-<timestamp>
+```
+
+On the development machine, `pd-pki-signing-tools normalize-root-inventory`
+can then normalize that public bundle into the committed repository contract
+under `inventory/root-ca/<root-id>/`:
 
 ```bash
 pd-pki-signing-tools normalize-root-inventory \
@@ -501,6 +510,7 @@ Exported request bundles always include `request.json`, the canonical CSR filena
 
 The repository also ships an interactive terminal TUI as the `pd-pki-operator` package and flake app. It wraps the existing `pd-pki-signing-tools` commands with an operator-guided flow for removable-media handoff:
 
+- export root inventory bundles to a mounted USB volume
 - export request bundles to a mounted USB volume
 - sign request bundles from a mounted USB volume and copy the signed result back to that volume
 - import signed bundles from a mounted USB volume into runtime state
@@ -521,7 +531,7 @@ The current wizard supports both file-backed and token-backed signing flows:
 - removable-volume auto-detection uses `lsblk` when available and always offers a manual mounted-path fallback
 - `PD_PKI_OPERATOR_PLAIN=1` forces the original line-oriented prompt mode when desired
 
-The wizard writes transfer material beneath `pd-pki-transfer/` on the selected removable volume so request, signed, and CRL bundles stay grouped cleanly during air-gapped handoff.
+The wizard writes transfer material beneath `pd-pki-transfer/` on the selected removable volume so root inventory, request, signed, and CRL bundles stay grouped cleanly during air-gapped handoff.
 
 ## Usage
 

@@ -38,7 +38,7 @@ in
       2. Run pd-pki-signing-tools init-root-yubikey --dry-run
       3. Review root-yubikey-init-plan.json in the chosen work directory
       4. Run the matching apply command with --force-reset and the secret files
-      5. Export the public ceremony bundle to removable media
+      5. Run pd-pki-signing-tools export-root-inventory from the archived public ceremony directory to removable media
       6. Normalize it on the development machine with pd-pki-signing-tools normalize-root-inventory
 
     Temporary debug access is enabled on this image:

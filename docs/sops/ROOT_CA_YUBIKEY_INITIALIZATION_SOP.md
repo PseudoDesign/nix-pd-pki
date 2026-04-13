@@ -305,7 +305,29 @@ Confirm that the summary recorded the reviewed plan path and digest, and that
 jq '{ forceResetApplied, reviewedPlan }' "$WORKDIR/root-yubikey-init-summary.json"
 ```
 
-### 7. Cleanup
+### 7. Export The Public Inventory Bundle
+
+Export the archived public ceremony artifacts to removable media as a root
+inventory bundle:
+
+```bash
+ROOT_ID="$(openssl x509 -in "$WORKDIR/root-ca.cert.pem" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+BUNDLE_DIR="/media/transfer/pd-pki-transfer/root-inventory/root-${ROOT_ID}-$(date -u +%Y%m%dT%H%M%SZ)"
+
+pd-pki-signing-tools export-root-inventory \
+  --source-dir "$ARCHIVE_DIR" \
+  --out-dir "$BUNDLE_DIR"
+```
+
+Confirm the removable-media bundle contains the expected normalized public
+contract files:
+
+```bash
+find "$BUNDLE_DIR" -maxdepth 1 -type f | sort
+jq . "$BUNDLE_DIR/manifest.json"
+```
+
+### 8. Cleanup
 
 Keep the generated public record in the approved archive location and remove any
 temporary copies of secrets that were created outside the controlled secret
@@ -348,9 +370,11 @@ Initialization is complete only if all of the following are true.
    root profile and ceremony record
 6. The runtime root certificate exists at the installed path from the summary
 7. The attestation certificate, metadata, plan, and summary have been archived
-8. The summary records the reviewed dry-run plan path and digest
-9. The routine signing URI has been recorded from `root-key-uri.txt`
-10. The PIN, PUK, and management key were not copied into the archive
+8. The removable-media root inventory bundle has been exported with
+   `manifest.json`
+9. The summary records the reviewed dry-run plan path and digest
+10. The routine signing URI has been recorded from `root-key-uri.txt`
+11. The PIN, PUK, and management key were not copied into the archive
 
 ## Failure Handling
 

@@ -33,6 +33,14 @@ produces public ceremony artifacts.
 Those artifacts are exported to removable media as a provisioning bundle, then
 normalized into a committed repository inventory entry.
 
+The intended provisioning-side export step is:
+
+```bash
+pd-pki-signing-tools export-root-inventory \
+  --source-dir /var/lib/pd-pki/yubikey-inventory/root-<serial> \
+  --out-dir /media/transfer/pd-pki-transfer/root-inventory/root-<root-id>-<timestamp>
+```
+
 The intended developer-machine normalization step is:
 
 ```bash
@@ -229,6 +237,10 @@ root-key-uri.txt
 The file set intentionally matches the committed inventory contract so the
 normalization step is a structural check plus path normalization rather than a
 semantic rewrite.
+
+The preferred way to produce this bundle is `pd-pki-signing-tools
+export-root-inventory`, pointed at the archived public outputs from
+`init-root-yubikey`.
 
 Files that remain outside this bundle:
 

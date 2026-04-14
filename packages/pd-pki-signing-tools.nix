@@ -1981,6 +1981,16 @@ EOF
       fi
       run_ykman --device "$yubikey_serial" piv keys attest "$slot" "$attestation_path"
 
+      # Older libp11 releases treat the PIV token as uninitialized until
+      # standard metadata objects exist, so create them before the PKCS#11
+      # self-sign step.
+      run_ykman --device "$yubikey_serial" piv objects generate CHUID \
+        --management-key "$root_management_key" \
+        --pin "$root_pin"
+      run_ykman --device "$yubikey_serial" piv objects generate CCC \
+        --management-key "$root_management_key" \
+        --pin "$root_pin"
+
       pin_source_file="$(mktemp "$work_dir/.root-pin.XXXXXX")"
       chmod 600 "$pin_source_file"
       printf '%s' "$root_pin" > "$pin_source_file"
@@ -2006,12 +2016,6 @@ EOF
         --pin "$root_pin" \
         --verify \
         --no-update-chuid
-      run_ykman --device "$yubikey_serial" piv objects generate CHUID \
-        --management-key "$root_management_key" \
-        --pin "$root_pin"
-      run_ykman --device "$yubikey_serial" piv objects generate CCC \
-        --management-key "$root_management_key" \
-        --pin "$root_pin"
 
       run_ykman --device "$yubikey_serial" piv certificates export "$slot" "$token_export_path"
       cmp -s "$certificate_path" "$token_export_path" || die "The certificate exported from the YubiKey does not match the locally generated copy"

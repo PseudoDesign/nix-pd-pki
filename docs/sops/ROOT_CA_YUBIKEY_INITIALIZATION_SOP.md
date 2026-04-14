@@ -250,9 +250,9 @@ This command performs the following actions:
 5. Changes the PIN, PUK, and management key from factory defaults
 6. Generates the root signing key on-token
 7. Captures the slot attestation certificate
-8. Creates the self-signed root certificate through the PKCS#11 signer path
-9. Imports the certificate into the configured slot
-10. Generates fresh CHUID and CCC objects
+8. Generates fresh CHUID and CCC objects
+9. Creates the self-signed root certificate through the PKCS#11 signer path
+10. Imports the certificate into the configured slot
 11. Verifies the exported certificate and public key
 12. Installs the root certificate to the configured runtime path
 13. Archives the generated public artifacts, plan, and summary

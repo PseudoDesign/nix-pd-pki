@@ -296,7 +296,25 @@ Record the attestation certificate fingerprint:
 openssl x509 -in "$WORKDIR/root-ca.attestation.cert.pem" -noout -fingerprint -sha256
 ```
 
-### 10. Generate The Root CA Certificate With OpenSSL
+### 10. Initialize Standard PIV Metadata
+
+Generate a fresh CHUID before using the PKCS#11 engine:
+
+```bash
+ykman --device "$YK_SERIAL" piv objects generate CHUID \
+  --management-key "$ROOT_MGM_KEY" \
+  --pin "$ROOT_PIN"
+```
+
+Generate a fresh CCC as well:
+
+```bash
+ykman --device "$YK_SERIAL" piv objects generate CCC \
+  --management-key "$ROOT_MGM_KEY" \
+  --pin "$ROOT_PIN"
+```
+
+### 11. Generate The Root CA Certificate With OpenSSL
 
 Set the OpenSSL engine locations expected on the NixOS workstation:
 
@@ -357,7 +375,7 @@ rm -f "$PIN_FILE"
 unset ROOT_KEY_URI PIN_FILE
 ```
 
-### 11. Import The Root CA Certificate Into Slot 9c
+### 12. Import The Root CA Certificate Into Slot 9c
 
 Import the CA certificate you just created into the token:
 
@@ -367,24 +385,6 @@ ykman --device "$YK_SERIAL" piv certificates import 9c "$WORKDIR/root-ca.cert.pe
   --pin "$ROOT_PIN" \
   --verify \
   --no-update-chuid
-```
-
-### 12. Initialize Standard PIV Metadata
-
-Generate a fresh CHUID:
-
-```bash
-ykman --device "$YK_SERIAL" piv objects generate CHUID \
-  --management-key "$ROOT_MGM_KEY" \
-  --pin "$ROOT_PIN"
-```
-
-Generate a fresh CCC:
-
-```bash
-ykman --device "$YK_SERIAL" piv objects generate CCC \
-  --management-key "$ROOT_MGM_KEY" \
-  --pin "$ROOT_PIN"
 ```
 
 ### 13. Export Public Artifacts

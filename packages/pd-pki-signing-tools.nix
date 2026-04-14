@@ -5,6 +5,7 @@ pkgs.writeShellApplication {
     pkgs.coreutils
     pkgs.jq
     pkgs.libp11
+    pkgs.opensc
     pkgs.openssl
     pkgs.yubikey-manager
     pkgs.util-linux
@@ -59,11 +60,44 @@ pkgs.writeShellApplication {
       jq -rn --arg value "$path" '$value | @uri' | sed 's#^#file:#'
     }
 
+    trim_whitespace() {
+      printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+    }
+
     pkcs11_uri_has_pin_directive() {
       case "$1" in
         *";pin-source="*|*";pin-value="*) return 0 ;;
         *) return 1 ;;
       esac
+    }
+
+    pkcs11_uri_attribute() {
+      local uri="$1"
+      local attribute_name="$2"
+      local uri_body=""
+      local component=""
+      local key=""
+
+      case "$uri" in
+        pkcs11:*)
+          uri_body="''${uri#pkcs11:}"
+          ;;
+        *)
+          return 1
+          ;;
+      esac
+
+      local IFS=';'
+      for component in $uri_body; do
+        key="''${component%%=*}"
+        [ "$key" = "$component" ] && continue
+        if [ "$key" = "$attribute_name" ]; then
+          printf '%s\n' "''${component#*=}"
+          return 0
+        fi
+      done
+
+      return 1
     }
 
     pkcs11_uri_with_pin_source() {
@@ -353,6 +387,48 @@ EOF
       printf 'pkcs11:token=YubiKey%%20PIV;id=%s;type=private\n' "$(root_yubikey_slot_object_id "$slot")"
     }
 
+    pkcs11_private_key_uri_matches_root_slot() {
+      local uri="$1"
+      local slot="$2"
+      local type=""
+      local object_id=""
+
+      type="$(pkcs11_uri_attribute "$uri" type 2>/dev/null || true)"
+      [ "$type" = "private" ] || return 1
+
+      object_id="$(pkcs11_uri_attribute "$uri" id 2>/dev/null || true)"
+      [ "$object_id" = "$(root_yubikey_slot_object_id "$slot")" ]
+    }
+
+    discover_pkcs11_private_key_uri() {
+      local module_path="$1"
+      local pin="$2"
+      local slot="$3"
+      local output=""
+      local line=""
+      local uri=""
+
+      require_command pkcs11-tool
+      [ -f "$module_path" ] || return 1
+
+      output="$(pkcs11-tool --module "$module_path" --login --pin "$pin" --list-objects --type privkey 2>/dev/null || true)"
+      [ -n "$output" ] || return 1
+
+      while IFS= read -r line; do
+        case "$line" in
+          "  uri:"*)
+            uri="$(trim_whitespace "''${line#*:}")"
+            if pkcs11_private_key_uri_matches_root_slot "$uri" "$slot"; then
+              printf '%s\n' "$uri"
+              return 0
+            fi
+            ;;
+        esac
+      done <<< "$output"
+
+      return 1
+    }
+
     root_yubikey_openssl_digest() {
       local algorithm=""
       algorithm="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
@@ -575,6 +651,15 @@ EOF
           .certificate.notAfter == $notAfter and
           .attestation.sha256Fingerprint == $attestationFingerprint
         ' "$summary_path" >/dev/null || die "Root YubiKey initialization summary does not match the provided certificate artifacts: $summary_path"
+
+      local routine_key_uri=""
+      local slot=""
+
+      routine_key_uri="$(jq -r '.routineKeyUri' "$summary_path")"
+      slot="$(jq -r '.slot' "$summary_path")"
+      pkcs11_uri_has_pin_directive "$routine_key_uri" && die "Root YubiKey initialization summary must not include an embedded PIN directive: $summary_path"
+      pkcs11_private_key_uri_matches_root_slot "$routine_key_uri" "$slot" ||
+        die "Root YubiKey initialization summary routineKeyUri does not identify the expected private key slot: $summary_path"
     }
 
     write_root_inventory_manifest() {
@@ -708,8 +793,8 @@ EOF
         die "Root inventory manifest slot does not match the initialization summary: $manifest_path"
       [ "$routine_key_uri" = "$(jq -r '.yubiKey.routineKeyUri' "$manifest_path")" ] ||
         die "Root inventory key URI file does not match manifest metadata: $key_uri_path"
-      [ "$routine_key_uri" = "$(root_yubikey_pkcs11_base_uri "$(jq -r '.yubiKey.slot' "$manifest_path")")" ] ||
-        die "Root inventory key URI file does not match the slot-derived PKCS#11 URI: $key_uri_path"
+      pkcs11_private_key_uri_matches_root_slot "$routine_key_uri" "$(jq -r '.yubiKey.slot' "$manifest_path")" ||
+        die "Root inventory key URI file does not identify the manifest's root private key slot: $key_uri_path"
       [ "$routine_key_uri" = "$(jq -r '.routineKeyUri' "$summary_path")" ] ||
         die "Root inventory key URI file does not match the initialization summary: $key_uri_path"
     }
@@ -752,8 +837,9 @@ EOF
       routine_key_uri="$(tr -d '\r\n' < "$key_uri_path")"
       [ -n "$routine_key_uri" ] || die "Root inventory key URI file is empty: $key_uri_path"
       pkcs11_uri_has_pin_directive "$routine_key_uri" && die "Root inventory key URI must not include an embedded PIN directive: $key_uri_path"
-      expected_routine_key_uri="$(root_yubikey_pkcs11_base_uri "$(jq -r '.slot' "$summary_path")")"
-      [ "$routine_key_uri" = "$expected_routine_key_uri" ] || die "Root inventory key URI does not match the slot-derived PKCS#11 URI: $key_uri_path"
+      expected_routine_key_uri="$(jq -r '.slot' "$summary_path")"
+      pkcs11_private_key_uri_matches_root_slot "$routine_key_uri" "$expected_routine_key_uri" ||
+        die "Root inventory key URI does not identify the expected private key slot: $key_uri_path"
       [ "$routine_key_uri" = "$(jq -r '.routineKeyUri' "$summary_path")" ] || die "Root inventory key URI does not match the initialization summary: $key_uri_path"
 
       certificate_pubkey="$(certificate_public_key "$certificate_path")"
@@ -1867,6 +1953,7 @@ EOF
       local ykman_algorithm=""
       local pin_source_file=""
       local key_uri_with_pin=""
+      local active_routine_key_uri=""
 
       validate_owner_only_file_permissions "$pin_file" "PIN"
       validate_owner_only_file_permissions "$puk_file" "PUK"
@@ -1991,10 +2078,16 @@ EOF
         --management-key "$root_management_key" \
         --pin "$root_pin"
 
+      active_routine_key_uri="$(discover_pkcs11_private_key_uri "$pkcs11_module_path" "$root_pin" "$slot" || true)"
+      if [ -z "$active_routine_key_uri" ]; then
+        active_routine_key_uri="$routine_key_uri"
+      fi
+      printf '%s\n' "$active_routine_key_uri" > "$key_uri_path"
+
       pin_source_file="$(mktemp "$work_dir/.root-pin.XXXXXX")"
       chmod 600 "$pin_source_file"
       printf '%s' "$root_pin" > "$pin_source_file"
-      key_uri_with_pin="$(pkcs11_uri_with_pin_source "$routine_key_uri" "$pin_source_file")"
+      key_uri_with_pin="$(pkcs11_uri_with_pin_source "$active_routine_key_uri" "$pin_source_file")"
 
       export PD_PKI_PKCS11_ENGINE_DIR="${pkgs.libp11}/lib/engines"
       export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module_path"
@@ -2035,7 +2128,7 @@ EOF
         "$yubikey_serial" \
         "$force_reset" \
         "$slot" \
-        "$routine_key_uri" \
+        "$active_routine_key_uri" \
         "$certificate_path" \
         "$attestation_path" \
         "$certificate_install_path" \

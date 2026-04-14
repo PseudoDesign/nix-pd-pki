@@ -371,13 +371,14 @@ pd-pki-signing-tools sign-request \
   --approved-by operator-vpn
 ```
 
-For a YubiKey or other PKCS#11-backed issuer key, use a `pkcs11:` URI plus the module path instead of `--issuer-key`:
+For a YubiKey or other PKCS#11-backed issuer key, use the token-reported
+`pkcs11:` private-key URI plus the module path instead of `--issuer-key`:
 
 ```bash
 pd-pki-signing-tools sign-request \
   --request-dir /tmp/server-request \
   --out-dir /tmp/server-signed \
-  --issuer-key-uri 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' \
+  --issuer-key-uri "$(cat /secure/issuer/key-uri.txt)" \
   --pkcs11-module /run/current-system/sw/lib/libykcs11.so \
   --pkcs11-pin-file /secure/issuer/pin.txt \
   --issuer-cert /secure/issuer/intermediate-ca.cert.pem \
@@ -385,6 +386,12 @@ pd-pki-signing-tools sign-request \
   --signer-state-dir /secure/issuer/state/intermediate \
   --policy-file /secure/issuer/policy/intermediate.json \
   --approved-by operator-vpn
+```
+
+You can capture that URI once with:
+
+```bash
+pkcs11-tool --module /run/current-system/sw/lib/libykcs11.so --login --pin '<issuer-pin>' --list-objects --type privkey
 ```
 
 3. Back on the request node, import the signed bundle into runtime state:
@@ -494,7 +501,7 @@ The same PKCS#11 options are available for CRL generation:
 ```bash
 pd-pki-signing-tools generate-crl \
   --signer-state-dir /secure/issuer/state/intermediate \
-  --issuer-key-uri 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' \
+  --issuer-key-uri "$(cat /secure/issuer/key-uri.txt)" \
   --pkcs11-module /run/current-system/sw/lib/libykcs11.so \
   --pkcs11-pin-file /secure/issuer/pin.txt \
   --issuer-cert /secure/issuer/intermediate-ca.cert.pem \

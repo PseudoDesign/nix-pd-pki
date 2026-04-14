@@ -156,7 +156,7 @@ Target shape:
   "yubiKey": {
     "serial": "<serial>",
     "slot": "<slot>",
-    "routineKeyUri": "pkcs11:token=YubiKey%20PIV;id=%02;type=private"
+    "routineKeyUri": "pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=<serial>;token=YubiKey%20PIV;id=%02;object=<label>;type=private"
   },
   "certificate": {
     "path": "root-ca.cert.pem",
@@ -192,7 +192,9 @@ Target shape:
    `root-yubikey-init-summary.json`.
 3. `attestation.sha256Fingerprint` must match
    `root-yubikey-init-summary.json.attestation.sha256Fingerprint`.
-4. `routineKeyUri` is non-secret inventory data and must not include a PIN.
+4. `routineKeyUri` is non-secret inventory data and must not include a PIN. It
+   may be either the short slot-derived URI or a more explicit token-reported
+   URI, but it must identify the root private key in the recorded slot.
 5. `yubiKey.serial` is audit metadata only. It must not be treated as the
    primary trust anchor.
 

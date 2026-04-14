@@ -103,7 +103,7 @@ listToAttrs [
       openssl pkey -in "$root_fixture/root-ca.key.pem" -pubout -outform pem > "$archive_dir/root-ca.pub.verified.pem"
       cp "$attestation_fixture/root-attestation.cert.pem" "$archive_dir/root-ca.attestation.cert.pem"
       write_certificate_metadata "$archive_dir/root-ca.cert.pem" "$archive_dir/root-ca.metadata.json" "root-ca-yubikey-initialized"
-      printf '%s\n' 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' > "$archive_dir/root-key-uri.txt"
+      printf '%s\n' 'pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=42424242;token=YubiKey%20PIV;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private' > "$archive_dir/root-key-uri.txt"
 
       fingerprint="$(certificate_fingerprint "$archive_dir/root-ca.cert.pem")"
       root_id="$(printf '%s' "$fingerprint" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
@@ -166,7 +166,7 @@ listToAttrs [
       jq -r '.contractKind' "$export_bundle_dir/manifest.json" | grep -Fx 'root-ca-inventory'
       jq -r '.rootId' "$export_bundle_dir/manifest.json" | grep -Fx "$root_id"
       jq -r '.yubiKey.serial' "$export_bundle_dir/manifest.json" | grep -Fx '42424242'
-      jq -r '.yubiKey.routineKeyUri' "$export_bundle_dir/manifest.json" | grep -Fx 'pkcs11:token=YubiKey%20PIV;id=%02;type=private'
+      jq -r '.yubiKey.routineKeyUri' "$export_bundle_dir/manifest.json" | grep -Fx 'pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=42424242;token=YubiKey%20PIV;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private'
 
       pd-pki-signing-tools normalize-root-inventory \
         --source-dir "$export_bundle_dir" \
@@ -214,7 +214,7 @@ listToAttrs [
       cp "$root_fixture/root-ca.pub.verified.pem" "$bundle_dir/root-ca.pub.verified.pem"
       cp "$attestation_fixture/root-attestation.cert.pem" "$bundle_dir/root-ca.attestation.cert.pem"
       cp "$root_fixture/root-ca.metadata.json" "$bundle_dir/root-ca.metadata.json"
-      printf '%s\n' 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' > "$bundle_dir/root-key-uri.txt"
+      printf '%s\n' 'pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=42424242;token=YubiKey%20PIV;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private' > "$bundle_dir/root-key-uri.txt"
 
       jq -n \
         --arg completedAt "2026-04-13T00:00:00Z" \
@@ -272,7 +272,7 @@ listToAttrs [
       jq -r '.certificate.sha256Fingerprint' "$inventory_dir/manifest.json" | grep -Fx "$(jq -r '.sha256Fingerprint' "$inventory_dir/root-ca.metadata.json")"
       jq -r '.certificate.sha256Fingerprint' "$inventory_dir/manifest.json" | grep -Fx "$(jq -r '.certificate.sha256Fingerprint' "$inventory_dir/root-yubikey-init-summary.json")"
       jq -r '.attestation.sha256Fingerprint' "$inventory_dir/manifest.json" | grep -Fx "$(jq -r '.attestation.sha256Fingerprint' "$inventory_dir/root-yubikey-init-summary.json")"
-      jq -r '.yubiKey.routineKeyUri' "$inventory_dir/manifest.json" | grep -Fx 'pkcs11:token=YubiKey%20PIV;id=%02;type=private'
+      jq -r '.yubiKey.routineKeyUri' "$inventory_dir/manifest.json" | grep -Fx 'pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=42424242;token=YubiKey%20PIV;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private'
 
       printf '%s\n' "[e2e-root-yubikey-inventory-normalization] root inventory normalization check passed"
       touch "$out"
@@ -312,7 +312,7 @@ listToAttrs [
       fingerprint="$(certificate_fingerprint "$bundle_dir/root-ca.cert.pem")"
       root_id="$(printf '%s' "$fingerprint" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
 
-      printf '%s\n' 'pkcs11:token=YubiKey%20PIV;id=%02;type=private' > "$bundle_dir/root-key-uri.txt"
+      printf '%s\n' 'pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=42424242;token=YubiKey%20PIV;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private' > "$bundle_dir/root-key-uri.txt"
       jq -n \
         --arg completedAt "2026-04-13T00:00:00Z" \
         --arg yubikeySerial "42424242" \

@@ -330,7 +330,16 @@ OpenSSL PKCS#11 URI:
 PIN_FILE="$WORKDIR/root-pin.txt"
 printf '%s' "$ROOT_PIN" > "$PIN_FILE"
 chmod 600 "$PIN_FILE"
-ROOT_KEY_URI="pkcs11:token=YubiKey%20PIV;id=%02;type=private;pin-source=file:$PIN_FILE"
+ROOT_KEY_URI="$(
+  pkcs11-tool --module /run/current-system/sw/lib/libykcs11.so \
+    --login \
+    --pin "$ROOT_PIN" \
+    --list-objects \
+    --type privkey |
+    awk '/^[[:space:]]+uri:/ && /id=%02/ && /type=private/ { sub(/^[[:space:]]+uri:[[:space:]]*/, ""); print; exit }'
+)"
+[ -n "$ROOT_KEY_URI" ]
+ROOT_KEY_URI="${ROOT_KEY_URI};pin-source=file:$PIN_FILE"
 ```
 
 Write a root CA extension profile:
@@ -421,26 +430,27 @@ Confirm:
 
 ### 14. Record The Operational PKCS#11 URI
 
-For this selected layout, the routine root signing URI is normally:
+Record the routine root signing URI exactly as the token reports it. Query the
+private-key object and save the returned `uri:` value:
 
-```text
-pkcs11:token=YubiKey%20PIV;id=%02;type=private
+```bash
+pkcs11-tool --module /run/current-system/sw/lib/libykcs11.so \
+  --login \
+  --pin "$ROOT_PIN" \
+  --list-objects \
+  --type privkey
 ```
 
-Record it in the workstation inventory along with:
+The URI may be the short slot-derived form
+`pkcs11:token=YubiKey%20PIV;id=%02;type=private` or a more explicit
+serial-qualified form. Record the reported `uri:` value in the workstation
+inventory for `id=%02` along with:
 
 1. Token serial
 2. Slot `9c`
 3. Algorithm `ECCP384`
 4. PIN policy `always`
 5. Touch policy `always`
-
-If your local environment requires a more explicit token URI, derive and record
-the serial-qualified URI from:
-
-```bash
-pkcs11-tool --module /run/current-system/sw/lib/libykcs11.so --list-objects --type cert
-```
 
 ### 15. Install The Exported Root Certificate For Repo Use
 

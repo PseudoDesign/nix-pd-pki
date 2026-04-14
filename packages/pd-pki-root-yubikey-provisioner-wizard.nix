@@ -27,7 +27,6 @@ pkgs.writeShellApplication {
     readonly sessions_root="$session_home/root-yubikey-provisioning"
     readonly secrets_root="$session_home/secrets"
     readonly archives_root="$session_home/yubikey-inventory"
-    readonly installed_certificates_root="$session_home/installed-certificates"
     readonly sudo_bin="/run/wrappers/bin/sudo"
 
     trim_whitespace() {
@@ -1106,7 +1105,6 @@ Next steps:
       local apply_log=""
       local share_a_disk_identity=""
       local archive_dir=""
-      local certificate_install_path=""
 
       require_command jq
       require_command lsblk
@@ -1135,7 +1133,7 @@ $profile_path"
         exit 1
       }
 
-      install -d -m 700 "$sessions_root" "$secrets_root" "$archives_root" "$installed_certificates_root"
+      install -d -m 700 "$sessions_root" "$secrets_root" "$archives_root"
       subject="$(jq -r '.subject' "$profile_path")"
       validity_days="$(jq -r '.validityDays' "$profile_path")"
 
@@ -1227,7 +1225,6 @@ Remove and seal each flash drive after export."
 
       work_dir="$sessions_root/root-$yubikey_serial-$session_timestamp"
       archive_dir="$archives_root/root-$yubikey_serial-$session_timestamp"
-      certificate_install_path="$installed_certificates_root/root-$yubikey_serial-$session_timestamp.cert.pem"
       dry_run_log="$work_dir/init-root-yubikey.dry-run.log"
       apply_log="$work_dir/init-root-yubikey.apply.log"
 
@@ -1241,7 +1238,6 @@ Remove and seal each flash drive after export."
           --profile "$profile_path" \
           --yubikey-serial "$yubikey_serial" \
           --work-dir "$work_dir" \
-          --certificate-install-path "$certificate_install_path" \
           --archive-dir "$archive_dir" \
           --dry-run; then
         show_command_failure \
@@ -1281,7 +1277,6 @@ Touch the YubiKey once when it begins flashing during certificate generation." \
           --profile "$profile_path" \
           --yubikey-serial "$yubikey_serial" \
           --work-dir "$work_dir" \
-          --certificate-install-path "$certificate_install_path" \
           --archive-dir "$archive_dir" \
           --pin-file "$pin_file" \
           --puk-file "$puk_file" \

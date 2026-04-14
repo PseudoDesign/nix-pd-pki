@@ -118,18 +118,51 @@ openssl_with_signer_backend() {
       openssl "$@"
       ;;
     pkcs11)
-      [ -n "${PD_PKI_PKCS11_PROVIDER_DIR:-}" ] || {
-        printf '%s\n' "PKCS#11 provider directory is not configured" >&2
+      [ "$#" -gt 0 ] || {
+        printf '%s\n' "PKCS#11 backend requires an OpenSSL subcommand" >&2
+        return 1
+      }
+      [ -n "${PD_PKI_PKCS11_ENGINE_DIR:-}" ] || {
+        printf '%s\n' "PKCS#11 engine directory is not configured" >&2
         return 1
       }
       [ -n "${PD_PKI_PKCS11_MODULE_PATH:-}" ] || {
         printf '%s\n' "PKCS#11 module path is not configured" >&2
         return 1
       }
-      env \
-        OPENSSL_MODULES="$PD_PKI_PKCS11_PROVIDER_DIR" \
-        PKCS11_PROVIDER_MODULE="$PD_PKI_PKCS11_MODULE_PATH" \
-        openssl "$@" -provider default -provider pkcs11
+      local openssl_subcommand="$1"
+      shift
+
+      case "$openssl_subcommand" in
+        req)
+          env \
+            OPENSSL_ENGINES="$PD_PKI_PKCS11_ENGINE_DIR" \
+            PKCS11_MODULE_PATH="$PD_PKI_PKCS11_MODULE_PATH" \
+            openssl req -engine pkcs11 -keyform ENGINE "$@"
+          ;;
+        pkey)
+          env \
+            OPENSSL_ENGINES="$PD_PKI_PKCS11_ENGINE_DIR" \
+            PKCS11_MODULE_PATH="$PD_PKI_PKCS11_MODULE_PATH" \
+            openssl pkey -engine pkcs11 -inform ENGINE "$@"
+          ;;
+        x509)
+          env \
+            OPENSSL_ENGINES="$PD_PKI_PKCS11_ENGINE_DIR" \
+            PKCS11_MODULE_PATH="$PD_PKI_PKCS11_MODULE_PATH" \
+            openssl x509 -engine pkcs11 -CAkeyform ENGINE "$@"
+          ;;
+        ca)
+          env \
+            OPENSSL_ENGINES="$PD_PKI_PKCS11_ENGINE_DIR" \
+            PKCS11_MODULE_PATH="$PD_PKI_PKCS11_MODULE_PATH" \
+            openssl ca -engine pkcs11 -keyform ENGINE "$@"
+          ;;
+        *)
+          printf '%s\n' "Unsupported OpenSSL command for PKCS#11 backend: $openssl_subcommand" >&2
+          return 1
+          ;;
+      esac
       ;;
     *)
       printf '%s\n' "Unsupported signer backend: $signer_backend" >&2

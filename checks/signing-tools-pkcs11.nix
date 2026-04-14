@@ -4,9 +4,9 @@ pkgs.runCommand "pd-pki-signing-tools-pkcs11-check"
     nativeBuildInputs = [
       packages.pd-pki-signing-tools
       pkgs.jq
+      pkgs.libp11
       pkgs.opensc
       pkgs.openssl
-      pkgs.pkcs11-provider
       pkgs.softhsm
     ];
   }
@@ -28,16 +28,16 @@ EOF
 
     module_path="${pkgs.softhsm}/lib/softhsm/libsofthsm2.so"
     pin_file="$workdir/pin.txt"
-    printf '%s\n' "123456" > "$pin_file"
+    printf '%s' "123456" > "$pin_file"
 
     softhsm2-util --init-token --free --label signer-token --so-pin 0000 --pin "$(tr -d '\n' < "$pin_file")" >/dev/null
     pkcs11-tool --module "$module_path" --token-label signer-token --login --pin "$(tr -d '\n' < "$pin_file")" --keypairgen --key-type rsa:3072 --id 01 --label issuer >/dev/null
 
-    export OPENSSL_MODULES="${pkgs.pkcs11-provider}/lib/ossl-modules"
-    export PKCS11_PROVIDER_MODULE="$module_path"
+    export OPENSSL_ENGINES="${pkgs.libp11}/lib/engines"
+    export PKCS11_MODULE_PATH="$module_path"
     issuer_key_uri="pkcs11:token=signer-token;id=%01;type=private;pin-source=file:$pin_file"
 
-    openssl req -new -x509 -days 3650 -subj /CN=SoftHSM-Test-Issuer -key "$issuer_key_uri" -provider default -provider pkcs11 -out "$workdir/issuer.cert.pem" >/dev/null 2>&1
+    openssl req -new -x509 -days 3650 -subj /CN=SoftHSM-Test-Issuer -engine pkcs11 -keyform ENGINE -key "$issuer_key_uri" -out "$workdir/issuer.cert.pem" >/dev/null 2>&1
 
     cat > "$workdir/server.req.conf" <<EOF
 [ req ]

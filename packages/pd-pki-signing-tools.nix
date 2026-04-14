@@ -81,6 +81,7 @@ pkgs.writeShellApplication {
       local key_ref_var_name="$6"
       local selected_backend=""
       local selected_key_ref=""
+      local normalized_pkcs11_pin_file=""
 
       if [ -n "$issuer_key" ] && [ -n "$issuer_key_uri" ]; then
         die "--issuer-key cannot be combined with --issuer-key-uri"
@@ -93,7 +94,7 @@ pkgs.writeShellApplication {
         [ -z "$pkcs11_module" ] || die "--pkcs11-module can only be used with --issuer-key-uri"
         [ -z "$pkcs11_pin_file" ] || die "--pkcs11-pin-file can only be used with --issuer-key-uri"
         require_file "$issuer_key"
-        unset PD_PKI_PKCS11_PROVIDER_DIR PD_PKI_PKCS11_MODULE_PATH || true
+        unset PD_PKI_PKCS11_PROVIDER_DIR PD_PKI_PKCS11_ENGINE_DIR PD_PKI_PKCS11_MODULE_PATH PD_PKI_PKCS11_PIN_SOURCE_FILE || true
         selected_backend="file"
         selected_key_ref="$issuer_key"
       else
@@ -113,11 +114,16 @@ pkgs.writeShellApplication {
           die "--pkcs11-pin-file cannot be combined with a pin already embedded in --issuer-key-uri"
         fi
         if [ -n "$pkcs11_pin_file" ]; then
-          selected_key_ref="$(pkcs11_uri_with_pin_source "$issuer_key_uri" "$pkcs11_pin_file")"
+          normalized_pkcs11_pin_file="$(mktemp "''${TMPDIR:-/tmp}/pd-pki-pkcs11-pin.XXXXXX")"
+          chmod 600 "$normalized_pkcs11_pin_file"
+          printf '%s' "$(read_trimmed_file_value "$pkcs11_pin_file" "PKCS#11 PIN")" > "$normalized_pkcs11_pin_file"
+          export PD_PKI_PKCS11_PIN_SOURCE_FILE="$normalized_pkcs11_pin_file"
+          trap 'rm -f "''${PD_PKI_PKCS11_PIN_SOURCE_FILE:-}"' EXIT
+          selected_key_ref="$(pkcs11_uri_with_pin_source "$issuer_key_uri" "$normalized_pkcs11_pin_file")"
         else
           selected_key_ref="$issuer_key_uri"
         fi
-        export PD_PKI_PKCS11_PROVIDER_DIR="${pkgs.pkcs11-provider}/lib/ossl-modules"
+        export PD_PKI_PKCS11_ENGINE_DIR="${pkgs.libp11}/lib/engines"
         export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module"
         selected_backend="pkcs11"
       fi
@@ -1977,10 +1983,10 @@ EOF
 
       pin_source_file="$(mktemp "$work_dir/.root-pin.XXXXXX")"
       chmod 600 "$pin_source_file"
-      printf '%s\n' "$root_pin" > "$pin_source_file"
+      printf '%s' "$root_pin" > "$pin_source_file"
       key_uri_with_pin="$(pkcs11_uri_with_pin_source "$routine_key_uri" "$pin_source_file")"
 
-      export PD_PKI_PKCS11_PROVIDER_DIR="$pkcs11_provider_directory"
+      export PD_PKI_PKCS11_ENGINE_DIR="${pkgs.libp11}/lib/engines"
       export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module_path"
       if ! openssl_with_signer_backend pkcs11 req -new -x509 \
         -key "$key_uri_with_pin" \

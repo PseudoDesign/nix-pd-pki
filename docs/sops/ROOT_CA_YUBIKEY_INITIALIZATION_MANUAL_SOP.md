@@ -75,7 +75,7 @@ temporary shell:
 nix shell \
   nixpkgs#yubikey-manager \
   nixpkgs#yubico-piv-tool \
-  nixpkgs#pkcs11-provider \
+  nixpkgs#libp11 \
   nixpkgs#openssl \
   nixpkgs#opensc
 ```
@@ -298,18 +298,19 @@ openssl x509 -in "$WORKDIR/root-ca.attestation.cert.pem" -noout -fingerprint -sh
 
 ### 10. Generate The Root CA Certificate With OpenSSL
 
-Set the PKCS#11 provider locations expected on the NixOS workstation:
+Set the OpenSSL engine locations expected on the NixOS workstation:
 
 ```bash
-export OPENSSL_MODULES='/run/current-system/sw/lib/ossl-modules'
-export PKCS11_PROVIDER_MODULE='/run/current-system/sw/lib/libykcs11.so'
+export OPENSSL_ENGINES='/run/current-system/sw/lib/engines'
+export PKCS11_MODULE_PATH='/run/current-system/sw/lib/libykcs11.so'
 ```
 
-Write the PIN to a temporary local file for the OpenSSL PKCS#11 URI:
+Write the PIN to a temporary local file without a trailing newline for the
+OpenSSL PKCS#11 URI:
 
 ```bash
 PIN_FILE="$WORKDIR/root-pin.txt"
-printf '%s\n' "$ROOT_PIN" > "$PIN_FILE"
+printf '%s' "$ROOT_PIN" > "$PIN_FILE"
 chmod 600 "$PIN_FILE"
 ROOT_KEY_URI="pkcs11:token=YubiKey%20PIV;id=%02;type=private;pin-source=file:$PIN_FILE"
 ```
@@ -338,8 +339,8 @@ Generate the self-signed root CA certificate using the on-token key:
 
 ```bash
 openssl req -new -x509 \
-  -provider default \
-  -provider pkcs11 \
+  -engine pkcs11 \
+  -keyform ENGINE \
   -key "$ROOT_KEY_URI" \
   -subj "$ROOT_SUBJECT" \
   -days "$ROOT_VALID_DAYS" \

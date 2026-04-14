@@ -43,8 +43,9 @@ in
 
     Suggested ceremony flow:
       1. Follow the on-screen provisioning wizard
-      2. Export root inventory from the archived public ceremony directory to removable media
-      3. Normalize it on the development machine with pd-pki-signing-tools normalize-root-inventory
+      2. Export two custodian secret-share bundles to separate flash drives
+      3. Export root inventory from the archived public ceremony directory to removable media
+      4. Normalize it on the development machine with pd-pki-signing-tools normalize-root-inventory
 
     Temporary debug access is enabled on this image:
       - wired DHCP networking
@@ -92,6 +93,9 @@ in
     '';
     windowManager.openbox.enable = true;
   };
+
+  services.devmon.enable = true;
+  services.udisks2.mountOnMedia = true;
 
   system.nixos.tags = [
     "offline-root-ca"

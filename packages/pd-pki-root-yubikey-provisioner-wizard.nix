@@ -177,6 +177,32 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
       ykman list --serials 2>/dev/null | grep -v '^[[:space:]]*$' || true
     }
 
+    list_usb_mounts() {
+      if ! command -v lsblk >/dev/null 2>&1; then
+        return 0
+      fi
+
+      lsblk -J -o NAME,PATH,PKNAME,RM,TRAN,TYPE,MOUNTPOINTS,LABEL,SERIAL,VENDOR,MODEL,SIZE 2>/dev/null |
+        jq -r '
+          def mounts:
+            (.mountpoints // []) | map(select(. != null and . != ""));
+          [
+            .blockdevices[]? | recurse(.children[]?)
+            | select(((.tran // "") == "usb") or (((.rm // 0) | tostring) == "1"))
+            | mounts[]? as $mount
+            | [
+                $mount,
+                (.path // ("/dev/" + (.name // ""))),
+                (.label // ""),
+                ([.vendor // "", .model // "", .serial // "", .size // ""] | map(select(. != "")) | join(" ")),
+                (if (.pkname // "") != "" then "/dev/" + .pkname else (.path // ("/dev/" + (.name // ""))) end)
+              ]
+            | @tsv
+          ]
+          | unique[]
+        ' 2>/dev/null || true
+    }
+
     wait_for_usb_clear() {
       (
         while true; do
@@ -270,83 +296,19 @@ The wizard will continue automatically when exactly one token is detected."
       openssl rand -hex 32 | tr '[:lower:]' '[:upper:]'
     }
 
-    prompt_credentials_verification() {
-      local expected_pin="$1"
-      local expected_puk="$2"
-      local expected_management_key="$3"
-      local entered=""
-      local entered_pin=""
-      local entered_puk=""
-      local entered_management_key=""
-
-      entered="$(zenity --forms \
-        --width=980 \
-        --height=520 \
-        --title="Verify Recorded Credentials" \
-        --text="Type the credentials back exactly as recorded before provisioning continues." \
-        --separator='|' \
-        --add-entry="PIN" \
-        --add-entry="PUK" \
-        --add-entry="Management Key")" || return 1
-
-      IFS='|' read -r entered_pin entered_puk entered_management_key <<EOF
-$entered
-EOF
-
-      if [ "$entered_pin" = "$expected_pin" ] && [ "$entered_puk" = "$expected_puk" ] && [ "$entered_management_key" = "$expected_management_key" ]; then
-        return 0
-      fi
-
-      return 1
-    }
-
-    generate_and_confirm_credentials() {
+    generate_credentials() {
       local pin=""
       local puk=""
       local management_key=""
 
-      while true; do
-        pin="$(generate_numeric_secret 8)"
+      pin="$(generate_numeric_secret 8)"
+      puk="$(generate_numeric_secret 8)"
+      while [ "$puk" = "$pin" ]; do
         puk="$(generate_numeric_secret 8)"
-        while [ "$puk" = "$pin" ]; do
-          puk="$(generate_numeric_secret 8)"
-        done
-        management_key="$(generate_management_key)"
-
-        show_info \
-          "Record New Credentials" \
-          "Write down these credentials before continuing.
-
-PIN
-$pin
-
-PUK
-$puk
-
-Management Key
-$management_key
-
-The next screen will ask you to type them back exactly."
-
-        while true; do
-          if prompt_credentials_verification "$pin" "$puk" "$management_key"; then
-            printf '%s\t%s\t%s\n' "$pin" "$puk" "$management_key"
-            return 0
-          fi
-
-          if confirm_step \
-            "Credentials Did Not Match" \
-            "Retry Entry" \
-            "Generate New Set" \
-            "The recorded values did not match what was entered.
-
-Choose Retry Entry to try again with the same values.
-Choose Generate New Set to discard them and create a fresh PIN, PUK, and management key."; then
-            continue
-          fi
-          break
-        done
       done
+      management_key="$(generate_management_key)"
+
+      printf '%s\t%s\t%s\n' "$pin" "$puk" "$management_key"
     }
 
     write_secret_file() {
@@ -356,6 +318,278 @@ Choose Generate New Set to discard them and create a fresh PIN, PUK, and managem
         umask 077
         printf '%s\n' "$secret" > "$target_path"
       )
+    }
+
+    choose_usb_mount_for_secret_export() {
+      local share_label="$1"
+      local excluded_disk_path="$2"
+      local mount_path=""
+      local device_path=""
+      local label=""
+      local description=""
+      local disk_path=""
+      local line=""
+      local choice=""
+      local -a usb_lines=()
+      local -a progress_usb_lines=()
+      local -a rows=()
+
+      while true; do
+        mapfile -t usb_lines < <(
+          while IFS=$'\t' read -r mount_path device_path label description disk_path; do
+            [ -n "$mount_path" ] || continue
+            if [ -n "$excluded_disk_path" ] && [ "$disk_path" = "$excluded_disk_path" ]; then
+              continue
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\n' "$mount_path" "$device_path" "$label" "$description" "$disk_path"
+          done < <(list_usb_mounts)
+        )
+
+        if [ "''${#usb_lines[@]}" -eq 0 ]; then
+          (
+            while true; do
+              mapfile -t progress_usb_lines < <(
+                while IFS=$'\t' read -r mount_path device_path label description disk_path; do
+                  [ -n "$mount_path" ] || continue
+                  if [ -n "$excluded_disk_path" ] && [ "$disk_path" = "$excluded_disk_path" ]; then
+                    continue
+                  fi
+                  printf '%s\t%s\t%s\t%s\t%s\n' "$mount_path" "$device_path" "$label" "$description" "$disk_path"
+                done < <(list_usb_mounts)
+              )
+              if [ "''${#progress_usb_lines[@]}" -gt 0 ]; then
+                printf '%s\n' "# Mounted removable media detected. Continuing..."
+                printf '%s\n' "100"
+                break
+              fi
+
+              printf '%s\n' "# Insert the USB flash drive for custodian $share_label.
+
+The wizard will export the PIN, the PUK, and management key share $share_label after the drive mounts automatically.
+
+Use a different flash drive for each custodian."
+              sleep "$poll_seconds"
+            done
+          ) | zenity --progress \
+            --pulsate \
+            --auto-close \
+            --no-cancel \
+            --width=960 \
+            --height=500 \
+            --title="Insert Flash Drive For Custodian $share_label" \
+            --text="Waiting for mounted removable media..."
+          continue
+        fi
+
+        if [ "''${#usb_lines[@]}" -eq 1 ]; then
+          printf '%s' "''${usb_lines[0]}"
+          return 0
+        fi
+
+        rows=()
+        for line in "''${usb_lines[@]}"; do
+          IFS=$'\t' read -r mount_path device_path label description disk_path <<EOF
+$line
+EOF
+          [ -n "$label" ] || label="(unlabeled)"
+          [ -n "$description" ] || description="$device_path"
+          rows+=("$mount_path" "$device_path" "$label" "$description")
+        done
+
+        choice="$(
+          zenity --list \
+            --width=1100 \
+            --height=520 \
+            --title="Choose Flash Drive For Custodian $share_label" \
+            --text="Multiple mounted removable volumes are available. Choose the destination for custodian $share_label." \
+            --column="Mount Path" \
+            --column="Device" \
+            --column="Label" \
+            --column="Details" \
+            "''${rows[@]}"
+        )" || return 1
+
+        for line in "''${usb_lines[@]}"; do
+          IFS=$'\t' read -r mount_path device_path label description disk_path <<EOF
+$line
+EOF
+          if [ "$mount_path" = "$choice" ]; then
+            printf '%s' "$line"
+            return 0
+          fi
+        done
+      done
+    }
+
+    export_secret_share_bundle() {
+      local share_label="$1"
+      local share_position="$2"
+      local management_key_share="$3"
+      local root_pin="$4"
+      local root_puk="$5"
+      local session_timestamp="$6"
+      local secret_dir="$7"
+      local subject="$8"
+      local validity_days="$9"
+      local excluded_disk_path="''${10}"
+      local selected_line=""
+      local share_slug=""
+      local mount_path=""
+      local device_path=""
+      local label=""
+      local description=""
+      local disk_path=""
+      local bundle_name=""
+      local bundle_stage_root=""
+      local bundle_stage_path=""
+      local target_parent=""
+      local target_bundle=""
+      local export_record_path=""
+      local management_key_share_file=""
+      local exported_at=""
+
+      selected_line="$(choose_usb_mount_for_secret_export "$share_label" "$excluded_disk_path")" || return 1
+      IFS=$'\t' read -r mount_path device_path label description disk_path <<EOF
+$selected_line
+EOF
+
+      share_slug="$(printf '%s' "$share_label" | tr '[:upper:]' '[:lower:]')"
+      bundle_name="root-yubikey-secret-share-$share_slug-$session_timestamp"
+      bundle_stage_root="$(mktemp -d "/tmp/$bundle_name.XXXXXX")"
+      bundle_stage_path="$bundle_stage_root/$bundle_name"
+      target_parent="$mount_path/pd-pki-transfer/root-secret-shares"
+      target_bundle="$target_parent/$bundle_name"
+      export_record_path="$secret_dir/share-$share_slug-export.json"
+      management_key_share_file="root-management-key-share-$share_slug.txt"
+      exported_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+      install -d -m 700 "$bundle_stage_path"
+      write_secret_file "$bundle_stage_path/root-pin.txt" "$root_pin"
+      write_secret_file "$bundle_stage_path/root-puk.txt" "$root_puk"
+      write_secret_file "$bundle_stage_path/$management_key_share_file" "$management_key_share"
+      cat > "$bundle_stage_path/README.txt" <<EOF
+Pseudo Design root YubiKey secret share bundle
+
+Custodian share: $share_label of 2
+Ceremony timestamp: $session_timestamp
+Subject: $subject
+Validity days: $validity_days
+
+This bundle contains:
+- the routine root-signing PIN
+- the break-glass PUK
+- management key share $share_label
+
+Management key reconstruction:
+- share A is the first 32 hexadecimal characters
+- share B is the final 32 hexadecimal characters
+- reconstruct by concatenating share A followed by share B with no separator
+
+Handle this drive as a sealed ceremony secret.
+EOF
+      jq -n \
+        --arg exportedAt "$exported_at" \
+        --arg ceremonyTimestamp "$session_timestamp" \
+        --arg shareId "$share_label" \
+        --arg sharePosition "$share_position" \
+        --arg subject "$subject" \
+        --arg validityDays "$validity_days" \
+        --arg pinFile "root-pin.txt" \
+        --arg pukFile "root-puk.txt" \
+        --arg managementKeyShareFile "$management_key_share_file" \
+        '{
+          schemaVersion: 1,
+          profile: "root-yubikey-secret-share",
+          exportedAt: $exportedAt,
+          ceremonyTimestamp: $ceremonyTimestamp,
+          subject: $subject,
+          validityDays: $validityDays,
+          shareId: $shareId,
+          shareCount: 2,
+          sharePosition: $sharePosition,
+          managementKeyReassembly: "Concatenate share A followed by share B with no separator.",
+          files: {
+            pin: $pinFile,
+            puk: $pukFile,
+            managementKeyShare: $managementKeyShareFile
+          }
+        }' > "$bundle_stage_path/manifest.json"
+
+      if sudo -n test -e "$target_bundle"; then
+        show_error "Share Export Failed" "The destination already contains:
+$target_bundle"
+        rm -rf "$bundle_stage_root"
+        return 1
+      fi
+
+      if ! sudo -n mkdir -p "$target_parent"; then
+        show_error "Share Export Failed" "The destination path could not be created:
+$target_parent"
+        rm -rf "$bundle_stage_root"
+        return 1
+      fi
+
+      if ! sudo -n cp -R "$bundle_stage_path" "$target_parent/"; then
+        show_error "Share Export Failed" "The secret share for custodian $share_label could not be copied to:
+$target_parent"
+        rm -rf "$bundle_stage_root"
+        return 1
+      fi
+
+      jq -n \
+        --arg exportedAt "$exported_at" \
+        --arg shareId "$share_label" \
+        --arg mountPath "$mount_path" \
+        --arg devicePath "$device_path" \
+        --arg diskPath "$disk_path" \
+        --arg bundlePath "$target_bundle" \
+        '{
+          schemaVersion: 1,
+          profile: "root-yubikey-secret-share-export-record",
+          exportedAt: $exportedAt,
+          shareId: $shareId,
+          mountPath: $mountPath,
+          devicePath: $devicePath,
+          diskPath: $diskPath,
+          bundlePath: $bundlePath
+        }' > "$export_record_path"
+
+      sync
+      if ! sudo -n umount "$mount_path"; then
+        show_error "Share Export Failed" "The flash drive for custodian $share_label was written, but the mounted volume could not be unmounted safely:
+$mount_path"
+        rm -rf "$bundle_stage_root"
+        return 1
+      fi
+
+      rm -rf "$bundle_stage_root"
+
+      show_info \
+        "Custodian $share_label Exported" \
+        "The secret-share bundle for custodian $share_label has been written to:
+$target_bundle
+
+The volume has been unmounted. Remove and seal the flash drive now."
+
+      printf '%s' "$disk_path"
+    }
+
+    remove_local_plaintext_secret_files() {
+      local secret_dir="$1"
+      local pin_file="$2"
+      local puk_file="$3"
+      local management_key_file="$4"
+
+      rm -f "$pin_file" "$puk_file" "$management_key_file"
+      cat > "$secret_dir/README.txt" <<EOF
+Pseudo Design root YubiKey local secret handling
+
+The plaintext PIN, PUK, and full management key files were removed from this
+workstation after successful provisioning.
+
+This directory retains only non-secret export records for the removable-media
+share bundles.
+EOF
     }
 
     show_command_failure() {
@@ -475,7 +709,9 @@ Certificate fingerprint: $certificate_fingerprint
 Installed certificate: $certificate_install_path
 Archived public artifacts: $archive_dir
 Ceremony work directory: $work_dir
-Secret files: $secret_dir
+Secret export records: $secret_dir
+
+The plaintext PIN, PUK, and full management key files were removed from this workstation after provisioning. Custodian flash drives now hold the exported secret shares.
 
 Next steps:
 1. Export the public root inventory bundle from the archive directory.
@@ -488,7 +724,11 @@ Next steps:
       local root_pin=""
       local root_puk=""
       local root_management_key=""
+      local management_key_share_a=""
+      local management_key_share_b=""
       local session_timestamp=""
+      local subject=""
+      local validity_days=""
       local yubikey_serial=""
       local work_dir=""
       local secret_dir=""
@@ -497,8 +737,10 @@ Next steps:
       local management_key_file=""
       local dry_run_log=""
       local apply_log=""
+      local share_a_disk_path=""
 
       require_command jq
+      require_command lsblk
       require_command pd-pki-signing-tools
       require_command sudo
       require_command ykman
@@ -511,6 +753,8 @@ $profile_path"
       }
 
       install -d -m 700 "$sessions_root" "$secrets_root"
+      subject="$(jq -r '.subject' "$profile_path")"
+      validity_days="$(jq -r '.validityDays' "$profile_path")"
 
       wait_for_usb_clear
 
@@ -524,10 +768,62 @@ Continue only if this token is new in box or has been explicitly designated acce
         exit 0
       fi
 
-      credentials="$(generate_and_confirm_credentials)" || exit 0
+      credentials="$(generate_credentials)" || exit 1
       IFS=$'\t' read -r root_pin root_puk root_management_key <<EOF
 $credentials
 EOF
+
+      management_key_share_a="''${root_management_key:0:32}"
+      management_key_share_b="''${root_management_key:32:32}"
+      session_timestamp="$(current_timestamp_utc)"
+      secret_dir="$secrets_root/root-yubikey-$session_timestamp"
+      pin_file="$secret_dir/root-pin.txt"
+      puk_file="$secret_dir/root-puk.txt"
+      management_key_file="$secret_dir/root-management-key.txt"
+      install -d -m 700 "$secret_dir"
+
+      show_info \
+        "Export Ceremony Secrets" \
+        "The wizard has generated a fresh PIN, a fresh PUK, and a two-part management key.
+
+The next two steps will export:
+- the PIN
+- the PUK
+- one half of the management key
+
+to two separate USB flash drives, one for each custodian.
+
+Remove and seal each flash drive after export."
+
+      share_a_disk_path="$(
+        export_secret_share_bundle \
+          "A" \
+          "first-half" \
+          "$management_key_share_a" \
+          "$root_pin" \
+          "$root_puk" \
+          "$session_timestamp" \
+          "$secret_dir" \
+          "$subject" \
+          "$validity_days" \
+          ""
+      )" || exit 1
+
+      wait_for_usb_clear
+
+      export_secret_share_bundle \
+        "B" \
+        "second-half" \
+        "$management_key_share_b" \
+        "$root_pin" \
+        "$root_puk" \
+        "$session_timestamp" \
+        "$secret_dir" \
+        "$subject" \
+        "$validity_days" \
+        "$share_a_disk_path" >/dev/null || exit 1
+
+      wait_for_usb_clear
 
       yubikey_serial="$(wait_for_single_yubikey)"
       [ -n "$yubikey_serial" ] || {
@@ -535,16 +831,11 @@ EOF
         exit 1
       }
 
-      session_timestamp="$(current_timestamp_utc)"
       work_dir="$sessions_root/root-$yubikey_serial-$session_timestamp"
-      secret_dir="$secrets_root/root-yubikey-$yubikey_serial-$session_timestamp"
-      pin_file="$secret_dir/root-pin.txt"
-      puk_file="$secret_dir/root-puk.txt"
-      management_key_file="$secret_dir/root-management-key.txt"
       dry_run_log="$work_dir/init-root-yubikey.dry-run.log"
       apply_log="$work_dir/init-root-yubikey.apply.log"
 
-      install -d -m 700 "$work_dir" "$secret_dir"
+      install -d -m 700 "$work_dir"
 
       if ! run_command_with_progress \
         "Preparing Provisioning Plan" \
@@ -604,6 +895,7 @@ $secret_dir"
         exit 1
       fi
 
+      remove_local_plaintext_secret_files "$secret_dir" "$pin_file" "$puk_file" "$management_key_file"
       show_success_screen "$work_dir/root-yubikey-init-summary.json" "$secret_dir" "$work_dir"
     }
 

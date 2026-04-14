@@ -12,6 +12,7 @@ pkgs.writeShellApplication {
     pkgs.openssl
     pkgs.parted
     pkgs.procps
+    pkgs.systemd
     pkgs.usbutils
     pkgs.util-linux
     pkgs.yubikey-manager
@@ -505,20 +506,69 @@ Continue only if this is the correct flash drive for custodian $share_label."
 
     first_partition_path_for_disk() {
       local disk_path="$1"
+      local expected_partition_path=""
 
-      lsblk -J -o PATH,TYPE "$disk_path" 2>/dev/null |
-        jq -r '
-          .blockdevices[]?.children[]?
-          | select(.type == "part")
-          | .path
-        ' 2>/dev/null |
-        head -n 1
+      expected_partition_path="$(expected_first_partition_path_for_disk "$disk_path")"
+      {
+        lsblk -nrpo PATH,TYPE "$disk_path" 2>/dev/null |
+          awk '$2 == "part" { print $1; exit }'
+        if [ -b "$expected_partition_path" ]; then
+          printf '%s\n' "$expected_partition_path"
+        fi
+      } |
+        awk 'NF { print; exit }'
+    }
+
+    expected_first_partition_path_for_disk() {
+      local disk_path="$1"
+      local disk_name=""
+
+      disk_name="$(basename "$disk_path")"
+      case "$disk_name" in
+        *[0-9])
+          printf '%sp1' "$disk_path"
+          ;;
+        *)
+          printf '%s1' "$disk_path"
+          ;;
+      esac
+    }
+
+    log_disk_partition_state() {
+      local disk_path="$1"
+      local log_path="$2"
+      local expected_partition_path=""
+
+      expected_partition_path="$(expected_first_partition_path_for_disk "$disk_path")"
+      {
+        printf 'Partition scan for %s\n' "$disk_path"
+        lsblk -o NAME,PATH,TYPE,FSTYPE,SIZE,MOUNTPOINTS "$disk_path" 2>/dev/null || true
+        printf 'expected-first-partition=%s exists=%s\n' \
+          "$expected_partition_path" \
+          "$(if [ -b "$expected_partition_path" ]; then printf yes; else printf no; fi)"
+      } >> "$log_path" 2>&1
+    }
+
+    rescan_disk_partition_table() {
+      local disk_path="$1"
+      local log_path="$2"
+
+      {
+        printf 'Rescanning partition table for %s\n' "$disk_path"
+        "$sudo_bin" -n partprobe "$disk_path" || true
+        "$sudo_bin" -n blockdev --rereadpt "$disk_path" || true
+        "$sudo_bin" -n partx -u "$disk_path" || true
+        udevadm settle --timeout=5 || true
+      } >> "$log_path" 2>&1
+
+      log_disk_partition_state "$disk_path" "$log_path"
     }
 
     wait_for_partition_path() {
       local disk_path="$1"
+      local log_path="$2"
       local partition_path=""
-      local retries_remaining="10"
+      local retries_remaining="15"
 
       while [ "$retries_remaining" -gt 0 ]; do
         partition_path="$(first_partition_path_for_disk "$disk_path" || true)"
@@ -526,6 +576,8 @@ Continue only if this is the correct flash drive for custodian $share_label."
           printf '%s' "$partition_path"
           return 0
         fi
+
+        rescan_disk_partition_table "$disk_path" "$log_path"
         retries_remaining="$((retries_remaining - 1))"
         sleep 1
       done
@@ -597,9 +649,7 @@ $disk_path"
         return 1
       fi
 
-      run_privileged partprobe "$disk_path" >/dev/null 2>&1 || true
-
-      partition_path="$(wait_for_partition_path "$disk_path")" || {
+      partition_path="$(wait_for_partition_path "$disk_path" "$format_log")" || {
         show_command_failure "Share Export Failed" "$format_log" "The new partition did not appear after formatting:
 $disk_path"
         return 1
@@ -966,9 +1016,12 @@ Next steps:
       require_command wipefs
       require_command parted
       require_command partprobe
+      require_command partx
+      require_command blockdev
       require_command mkfs.vfat
       require_command mount
       require_command umount
+      require_command udevadm
       require_command pd-pki-signing-tools
       require_command ykman
       require_command zenity

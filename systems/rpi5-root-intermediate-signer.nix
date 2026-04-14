@@ -1,7 +1,8 @@
 { lib, ... }:
 let
-  operatorHome = "/home/operator";
-  operatorSecretsDirectory = "${operatorHome}/secrets";
+  ceremonyUser = "pdpki";
+  ceremonyHome = "/var/lib/pd-pki";
+  ceremonySecretsDirectory = "${ceremonyHome}/secrets";
 in
 {
   imports = [ ./rpi5-root-ca-base.nix ];
@@ -10,7 +11,7 @@ in
   networking.hostName = "rpi5-root-intermediate-signer";
 
   environment.shellInit = ''
-    if [ "''${USER:-}" = operator ] && [ "''${HOME:-}" = ${lib.escapeShellArg operatorHome} ]; then
+    if [ "''${USER:-}" = ${lib.escapeShellArg ceremonyUser} ] && [ "''${HOME:-}" = ${lib.escapeShellArg ceremonyHome} ]; then
       umask 077
       export PIN_FILE="$HOME/secrets/root-pin.txt"
       export ROOT_POLICY_FILE="$HOME/policy/root-policy.json"
@@ -21,11 +22,11 @@ in
   environment.etc."motd".text = ''
     Pseudo Design offline root CA intermediate signer
 
-    Operator shell defaults:
+    Ceremony shell defaults:
       umask 077
-      PIN_FILE=${operatorSecretsDirectory}/root-pin.txt
-      ROOT_POLICY_FILE=/home/operator/policy/root-policy.json
-      ROOT_INVENTORY_ROOT=/home/operator/inventory/root-ca
+      PIN_FILE=${ceremonySecretsDirectory}/root-pin.txt
+      ROOT_POLICY_FILE=${ceremonyHome}/policy/root-policy.json
+      ROOT_INVENTORY_ROOT=${ceremonyHome}/inventory/root-ca
 
     Suggested ceremony flow:
       1. Confirm the committed root inventory has been copied onto the workstation
@@ -39,7 +40,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    Local console autologin is enabled for the operator account by default.
+    Local console autologin is enabled for the ${ceremonyUser} system account by default.
     Review and harden the login policy before using this image in production.
   '';
 

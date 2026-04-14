@@ -184,7 +184,7 @@ Operational defaults for this appliance:
 - disables SSH, NetworkManager, onboard Wi-Fi, and onboard Bluetooth
 - rejects USB devices by default with `usbguard`, allowing only YubiKeys,
   USB mass-storage devices, and boot-keyboard-class HID interfaces
-- auto-logs the `operator` account into a lightweight graphical provisioning
+- auto-logs a dedicated `pdpki` system account into a lightweight graphical provisioning
   wizard that clears the USB ports, generates fresh PIN / PUK / management
   key material, reformats and exports two custodian secret-share bundles to
   separate flash drives, waits for a single inserted YubiKey, runs the reviewed
@@ -332,10 +332,10 @@ before an intermediate signing ceremony begins:
 
 ```bash
 pd-pki-signing-tools verify-root-yubikey-identity \
-  --inventory-dir /home/operator/inventory/root-ca/<root-id> \
+  --inventory-dir /var/lib/pd-pki/inventory/root-ca/<root-id> \
   --yubikey-serial <serial> \
-  --pin-file /home/operator/secrets/root-pin.txt \
-  --work-dir /home/operator/verify-root-yubikey
+  --pin-file /var/lib/pd-pki/secrets/root-pin.txt \
+  --work-dir /var/lib/pd-pki/verify-root-yubikey
 ```
 
 The resulting `root-yubikey-identity-summary.json` records whether the inserted

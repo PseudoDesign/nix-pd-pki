@@ -95,7 +95,7 @@ pkgs.writeShellApplication {
       if [ -n "''${USER:-}" ]; then
         printf '%s\n' "$USER"
       else
-        printf '%s\n' "operator"
+        printf '%s\n' "pdpki"
       fi
     }
 
@@ -1830,7 +1830,7 @@ pkgs.writeShellApplication {
 
       if [ "$request_role" = "intermediate-signing-authority" ] && [ "$issuer_profile" = "root" ] && [ "$signer_backend" = "pkcs11" ]; then
         root_identity_verification_required=1
-        root_inventory_root="''${ROOT_INVENTORY_ROOT:-/home/operator/inventory/root-ca}"
+        root_inventory_root="''${ROOT_INVENTORY_ROOT:-/var/lib/pd-pki/inventory/root-ca}"
         root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
         root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
         show_root_inventory_summary "$root_inventory_dir"

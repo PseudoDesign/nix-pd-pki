@@ -1,5 +1,7 @@
 { lib, pkgs, nixos-raspberrypi, ... }:
 let
+  ceremonyUser = "pdpki";
+  ceremonyHome = "/var/lib/pd-pki";
   definitions = import ../packages/definitions.nix;
   pdPkiPackages = import ../packages {
     inherit pkgs definitions;
@@ -76,14 +78,18 @@ in
     };
   };
 
-  services.getty.autologinUser = "operator";
+  services.getty.autologinUser = ceremonyUser;
 
-  users.users.operator = {
-    isNormalUser = true;
-    description = "Offline Root CA Operator";
+  users.groups.${ceremonyUser} = { };
+
+  users.users.${ceremonyUser} = {
+    isSystemUser = true;
+    description = "Offline Root CA Ceremony Session";
     extraGroups = [ "wheel" ];
+    group = ceremonyUser;
     createHome = true;
-    home = "/home/operator";
+    home = ceremonyHome;
+    shell = pkgs.bashInteractive;
   };
 
   users.users.adam = {
@@ -103,7 +109,7 @@ in
   ];
 
   environment.shellInit = lib.mkDefault ''
-    if [ "''${USER:-}" = operator ] && [ "''${HOME:-}" = /home/operator ]; then
+    if [ "''${USER:-}" = ${ceremonyUser} ] && [ "''${HOME:-}" = ${ceremonyHome} ]; then
       umask 077
     fi
   '';
@@ -132,7 +138,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    Local console autologin is enabled for the operator account by default.
+    Local console autologin is enabled for the ${ceremonyUser} system account by default.
     Review and harden the login policy before using this image in production.
   '';
 

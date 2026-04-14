@@ -1,7 +1,8 @@
 { lib, pkgs, definitions, nixos-raspberrypi, ... }:
 let
-  operatorHome = "/home/operator";
-  operatorSecretsDirectory = "${operatorHome}/secrets";
+  ceremonyUser = "pdpki";
+  ceremonyHome = "/var/lib/pd-pki";
+  ceremonySecretsDirectory = "${ceremonyHome}/secrets";
   rootYubiKeyProfilePath = "/etc/pd-pki/root-yubikey-init-profile.json";
   pdPkiPackages = import ../packages {
     inherit pkgs definitions;
@@ -17,7 +18,7 @@ in
   networking.hostName = "rpi5-root-yubikey-provisioner";
 
   environment.shellInit = ''
-    if [ "''${USER:-}" = operator ] && [ "''${HOME:-}" = ${lib.escapeShellArg operatorHome} ]; then
+    if [ "''${USER:-}" = ${lib.escapeShellArg ceremonyUser} ] && [ "''${HOME:-}" = ${lib.escapeShellArg ceremonyHome} ]; then
       umask 077
       export PROFILE=${lib.escapeShellArg rootYubiKeyProfilePath}
       export PIN_FILE="$HOME/secrets/root-pin.txt"
@@ -32,12 +33,12 @@ in
     Root YubiKey profile:
       ${rootYubiKeyProfilePath}
 
-    Operator shell defaults:
+    Ceremony shell defaults:
       umask 077
       PROFILE=${rootYubiKeyProfilePath}
-      PIN_FILE=${operatorSecretsDirectory}/root-pin.txt
-      PUK_FILE=${operatorSecretsDirectory}/root-puk.txt
-      MANAGEMENT_KEY_FILE=${operatorSecretsDirectory}/root-management-key.txt
+      PIN_FILE=${ceremonySecretsDirectory}/root-pin.txt
+      PUK_FILE=${ceremonySecretsDirectory}/root-puk.txt
+      MANAGEMENT_KEY_FILE=${ceremonySecretsDirectory}/root-management-key.txt
 
     The appliance launches the graphical provisioning wizard automatically on boot.
 
@@ -52,7 +53,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    The operator account auto-logs into the local graphical wizard session.
+    The ${ceremonyUser} system account auto-logs into the local graphical wizard session.
     Switch to another VT or use SSH for terminal-based debug access when needed.
   '';
 
@@ -60,14 +61,14 @@ in
 
   services.displayManager = {
     autoLogin.enable = true;
-    autoLogin.user = "operator";
+    autoLogin.user = ceremonyUser;
     defaultSession = "none+openbox";
   };
 
   security.sudo.extraRules = lib.mkAfter [
     {
       users = [
-        "operator"
+        ceremonyUser
         "adam"
       ];
       commands = [

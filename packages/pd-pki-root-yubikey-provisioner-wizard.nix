@@ -12,7 +12,6 @@ pkgs.writeShellApplication {
     pkgs.openssl
     pkgs.parted
     pkgs.procps
-    pkgs.sudo
     pkgs.usbutils
     pkgs.util-linux
     pkgs.yubikey-manager
@@ -23,9 +22,10 @@ pkgs.writeShellApplication {
 
     readonly poll_seconds="2"
     readonly profile_path="/etc/pd-pki/root-yubikey-init-profile.json"
-    readonly operator_home="''${HOME:-/home/operator}"
-    readonly sessions_root="$operator_home/root-yubikey-provisioning"
-    readonly secrets_root="$operator_home/secrets"
+    readonly session_home="''${HOME:-/var/lib/pd-pki}"
+    readonly sessions_root="$session_home/root-yubikey-provisioning"
+    readonly secrets_root="$session_home/secrets"
+    readonly sudo_bin="/run/wrappers/bin/sudo"
 
     trim_whitespace() {
       local value="$1"
@@ -69,6 +69,10 @@ pkgs.writeShellApplication {
         show_error "Missing Dependency" "Required command not found: $1"
         exit 1
       }
+    }
+
+    run_privileged() {
+      "$sudo_bin" -n "$@"
     }
 
     read_sysfs_value() {
@@ -495,7 +499,7 @@ Continue only if this is the correct flash drive for custodian $share_label."
 
       while IFS= read -r mount_path; do
         [ -n "$mount_path" ] || continue
-        sudo -n umount "$mount_path"
+        run_privileged umount "$mount_path"
       done < <(list_disk_mount_paths "$disk_path")
     }
 
@@ -575,25 +579,25 @@ $disk_path"
         return 1
       }
 
-      if ! run_logged_retry_command "$format_log" "5" sudo -n wipefs -af "$disk_path"; then
+      if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n wipefs -af "$disk_path"; then
         show_command_failure "Share Export Failed" "$format_log" "The selected flash drive could not be prepared for formatting:
 $disk_path"
         return 1
       fi
 
-      if ! run_logged_retry_command "$format_log" "5" sudo -n parted -s "$disk_path" mklabel gpt; then
+      if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n parted -s "$disk_path" mklabel gpt; then
         show_command_failure "Share Export Failed" "$format_log" "The selected flash drive could not be repartitioned:
 $disk_path"
         return 1
       fi
 
-      if ! run_logged_retry_command "$format_log" "5" sudo -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
+      if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
         show_command_failure "Share Export Failed" "$format_log" "The FAT32 partition could not be created on:
 $disk_path"
         return 1
       fi
 
-      sudo -n partprobe "$disk_path" >/dev/null 2>&1 || true
+      run_privileged partprobe "$disk_path" >/dev/null 2>&1 || true
 
       partition_path="$(wait_for_partition_path "$disk_path")" || {
         show_command_failure "Share Export Failed" "$format_log" "The new partition did not appear after formatting:
@@ -601,14 +605,14 @@ $disk_path"
         return 1
       }
 
-      if ! run_logged_retry_command "$format_log" "5" sudo -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path"; then
+      if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path"; then
         show_command_failure "Share Export Failed" "$format_log" "The new FAT32 filesystem could not be created on:
 $partition_path"
         return 1
       fi
 
       install -d -m 700 "$mount_path"
-      if ! run_logged_retry_command "$format_log" "5" sudo -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
+      if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
         rmdir "$mount_path" 2>/dev/null || true
         show_command_failure "Share Export Failed" "$format_log" "The freshly formatted flash drive for custodian $share_label could not be mounted:
 $partition_path"
@@ -725,7 +729,7 @@ EOF
           }
         }' > "$bundle_stage_path/manifest.json"
 
-      if sudo -n test -e "$target_bundle"; then
+      if run_privileged test -e "$target_bundle"; then
         show_error "Share Export Failed" "The destination already contains:
 $target_bundle"
         rm -rf "$bundle_stage_root"
@@ -735,7 +739,7 @@ $target_bundle"
       if ! mkdir -p "$target_parent"; then
         show_error "Share Export Failed" "The destination path could not be created:
 $target_parent"
-        sudo -n umount "$mount_path" >/dev/null 2>&1 || true
+        run_privileged umount "$mount_path" >/dev/null 2>&1 || true
         rm -rf "$bundle_stage_root"
         return 1
       fi
@@ -743,7 +747,7 @@ $target_parent"
       if ! cp -R "$bundle_stage_path" "$target_parent/"; then
         show_error "Share Export Failed" "The secret share for custodian $share_label could not be copied to:
 $target_parent"
-        sudo -n umount "$mount_path" >/dev/null 2>&1 || true
+        run_privileged umount "$mount_path" >/dev/null 2>&1 || true
         rm -rf "$bundle_stage_root"
         return 1
       fi
@@ -769,7 +773,7 @@ $target_parent"
         }' > "$export_record_path"
 
       sync
-      if ! sudo -n umount "$mount_path"; then
+      if ! run_privileged umount "$mount_path"; then
         show_error "Share Export Failed" "The flash drive for custodian $share_label was written, but the mounted volume could not be unmounted safely:
 $mount_path"
         rm -rf "$bundle_stage_root"
@@ -966,10 +970,14 @@ Next steps:
       require_command mount
       require_command umount
       require_command pd-pki-signing-tools
-      require_command sudo
       require_command ykman
       require_command zenity
       require_command openssl
+      [ -x "$sudo_bin" ] || {
+        show_error "Missing Dependency" "Required sudo wrapper not found:
+$sudo_bin"
+        exit 1
+      }
       [ -f "$profile_path" ] || {
         show_error "Missing Profile" "Provisioning profile not found:
 $profile_path"
@@ -1114,7 +1122,7 @@ When the YubiKey flashes during certificate generation, touch it once to authori
 
 Touch the YubiKey once when it begins flashing during certificate generation." \
         "$apply_log" \
-        sudo -n pd-pki-signing-tools init-root-yubikey \
+        "$sudo_bin" -n pd-pki-signing-tools init-root-yubikey \
           --profile "$profile_path" \
           --yubikey-serial "$yubikey_serial" \
           --work-dir "$work_dir" \

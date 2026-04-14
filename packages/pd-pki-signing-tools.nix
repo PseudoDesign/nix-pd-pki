@@ -439,6 +439,67 @@ EOF
       esac
     }
 
+    subject_to_rfc4514() {
+      local subject="$1"
+      local tmpdir=""
+      local key_path=""
+      local csr_path=""
+      local converted=""
+
+      case "$subject" in
+        /*)
+          tmpdir="$(mktemp -d "''${TMPDIR:-/tmp}/pd-pki-subject.XXXXXX")"
+          key_path="$tmpdir/key.pem"
+          csr_path="$tmpdir/subject.csr.pem"
+          if ! openssl req -new -newkey rsa:2048 -nodes \
+            -subj "$subject" \
+            -keyout "$key_path" \
+            -out "$csr_path" >/dev/null 2>&1; then
+            rm -rf "$tmpdir"
+            die "Failed to convert OpenSSL subject to RFC 4514 form: $subject"
+          fi
+          converted="$(openssl req -in "$csr_path" -noout -subject -nameopt RFC2253 | sed 's/^subject=//')" ||
+            {
+              rm -rf "$tmpdir"
+              die "Failed to read converted RFC 4514 subject for: $subject"
+            }
+          rm -rf "$tmpdir"
+          [ -n "$converted" ] || die "Converted RFC 4514 subject is empty for: $subject"
+          printf '%s\n' "$converted"
+          ;;
+        *)
+          printf '%s\n' "$subject"
+          ;;
+      esac
+    }
+
+    generate_root_yubikey_certificate() {
+      local yubikey_serial="$1"
+      local slot="$2"
+      local public_key_path="$3"
+      local subject="$4"
+      local valid_days="$5"
+      local digest="$6"
+      local pin="$7"
+      local management_key="$8"
+      local certificate_path="$9"
+
+      local pythonpath="${pkgs.python3.pkgs.makePythonPath [ pkgs.yubikey-manager ]}"
+
+      PYTHONNOUSERSITE=true \
+      PYTHONPATH="$pythonpath" \
+      "${pkgs.python3}/bin/python3" "${./root-yubikey-selfsign.py}" \
+        --yubikey-serial "$yubikey_serial" \
+        --slot "$slot" \
+        --public-key "$public_key_path" \
+        --subject "$(subject_to_rfc4514 "$subject")" \
+        --valid-days "$valid_days" \
+        --hash-algorithm "$digest" \
+        --pin "$pin" \
+        --management-key-hex "$management_key" \
+        --out-cert "$certificate_path"
+    }
+
     write_root_ca_openssl_config() {
       local target="$1"
 
@@ -1951,8 +2012,6 @@ EOF
       local root_management_key=""
       local default_management_key="010203040506070801020304050607080102030405060708"
       local ykman_algorithm=""
-      local pin_source_file=""
-      local key_uri_with_pin=""
       local active_routine_key_uri=""
 
       validate_owner_only_file_permissions "$pin_file" "PIN"
@@ -2084,36 +2143,18 @@ EOF
       fi
       printf '%s\n' "$active_routine_key_uri" > "$key_uri_path"
 
-      pin_source_file="$(mktemp "$work_dir/.root-pin.XXXXXX")"
-      chmod 600 "$pin_source_file"
-      printf '%s' "$root_pin" > "$pin_source_file"
-      key_uri_with_pin="$(pkcs11_uri_with_pin_source "$active_routine_key_uri" "$pin_source_file")"
-
-      export PD_PKI_PKCS11_ENGINE_DIR="${pkgs.libp11}/lib/engines"
-      export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module_path"
-      if ! env \
-        OPENSSL_ENGINES="${pkgs.libp11}/lib/engines" \
-        PKCS11_MODULE_PATH="$pkcs11_module_path" \
-        openssl x509 -new \
-          -engine pkcs11 \
-          -keyform ENGINE \
-          -key "$key_uri_with_pin" \
-          -subj "$subject" \
-          -days "$validity_days" \
-          "-$digest" \
-          -extfile "$openssl_config_path" \
-          -extensions v3_root_ca \
-          -out "$certificate_path"; then
-        rm -f "$pin_source_file"
-        die "Failed to generate the self-signed root certificate through the YubiKey PKCS#11 key"
+      if ! generate_root_yubikey_certificate \
+        "$yubikey_serial" \
+        "$slot" \
+        "$public_key_path" \
+        "$subject" \
+        "$validity_days" \
+        "$digest" \
+        "$root_pin" \
+        "$root_management_key" \
+        "$certificate_path"; then
+        die "Failed to generate and store the self-signed root certificate on the YubiKey"
       fi
-      rm -f "$pin_source_file"
-
-      run_ykman --device "$yubikey_serial" piv certificates import "$slot" "$certificate_path" \
-        --management-key "$root_management_key" \
-        --pin "$root_pin" \
-        --verify \
-        --no-update-chuid
 
       run_ykman --device "$yubikey_serial" piv certificates export "$slot" "$token_export_path"
       cmp -s "$certificate_path" "$token_export_path" || die "The certificate exported from the YubiKey does not match the locally generated copy"

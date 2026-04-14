@@ -9,8 +9,9 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from ykman.device import list_all_devices
 from ykman.piv import parse_rfc4514_string, sign_certificate_builder
-from yubikit.core.smartcard import SmartCardConnection
-from yubikit.piv import KEY_TYPE, PivSession, SLOT
+from yubikit.core import NotSupportedError, _timeout
+from yubikit.core.smartcard import SW, ApduError, SmartCardConnection
+from yubikit.piv import KEY_TYPE, PivSession, SLOT, TOUCH_POLICY
 
 
 def hash_algorithm(name: str):
@@ -38,6 +39,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--management-key-hex", required=True)
     parser.add_argument("--out-cert", required=True)
     return parser.parse_args()
+
+
+def prompt_for_touch(prompt: str = "Touch your YubiKey...") -> None:
+    print(prompt, file=sys.stderr)
 
 
 def main() -> int:
@@ -92,7 +97,25 @@ def main() -> int:
             session = PivSession(connection)
             session.authenticate(bytes.fromhex(args.management_key_hex))
             session.verify_pin(args.pin)
-            certificate = sign_certificate_builder(session, slot, key_type, builder, digest)
+
+            try:
+                metadata = session.get_slot_metadata(slot)
+                if metadata.touch_policy in (TOUCH_POLICY.ALWAYS, TOUCH_POLICY.CACHED):
+                    timeout = 0.0
+                else:
+                    timeout = 30.0
+            except ApduError as error:
+                if error.sw == SW.REFERENCE_DATA_NOT_FOUND:
+                    print(f"No private key in slot {slot.name}.", file=sys.stderr)
+                    return 1
+                raise
+            except NotSupportedError:
+                timeout = 1.0
+
+            with _timeout(prompt_for_touch, timeout):
+                certificate = sign_certificate_builder(
+                    session, slot, key_type, builder, digest
+                )
             session.put_certificate(slot, certificate)
             output_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
             return 0

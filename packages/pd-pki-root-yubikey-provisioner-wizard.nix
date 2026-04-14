@@ -503,11 +503,6 @@ $profile_path"
         exit 1
       }
 
-      if ! sudo -n true >/dev/null 2>&1; then
-        show_error "Sudo Access Required" "Passwordless sudo is required for the provisioning wizard."
-        exit 1
-      fi
-
       install -d -m 700 "$sessions_root" "$secrets_root"
 
       wait_for_usb_clear
@@ -586,7 +581,7 @@ When the YubiKey flashes during certificate generation, touch it once to authori
 
 Touch the YubiKey once when it begins flashing during certificate generation." \
         "$apply_log" \
-        sudo pd-pki-signing-tools init-root-yubikey \
+        sudo -n pd-pki-signing-tools init-root-yubikey \
           --profile "$profile_path" \
           --yubikey-serial "$yubikey_serial" \
           --work-dir "$work_dir" \
@@ -597,7 +592,7 @@ Touch the YubiKey once when it begins flashing during certificate generation." \
         show_command_failure \
           "Provisioning Failed" \
           "$apply_log" \
-          "The YubiKey provisioning step failed. The generated credentials remain in:
+          "The YubiKey provisioning step failed. If privilege escalation was unavailable, the attached log will show the sudo error directly. The generated credentials remain in:
 $secret_dir"
         exit 1
       fi

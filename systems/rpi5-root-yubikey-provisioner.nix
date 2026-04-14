@@ -63,6 +63,24 @@ in
     defaultSession = "none+openbox";
   };
 
+  security.sudo.extraRules = lib.mkAfter [
+    {
+      users = [
+        "operator"
+        "adam"
+      ];
+      commands = [
+        {
+          command = "ALL";
+          options = [
+            "NOPASSWD"
+            "SETENV"
+          ];
+        }
+      ];
+    }
+  ];
+
   services.xserver = {
     enable = true;
     videoDrivers = [ "modesetting" ];

@@ -1,0 +1,1 @@
+pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=35454690;token=YubiKey%20PIV%20%2335454690;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private

@@ -62,6 +62,7 @@ in
 
   services.xserver = {
     enable = true;
+    videoDrivers = [ "modesetting" ];
     displayManager.lightdm.enable = true;
     displayManager.sessionCommands = ''
       ${pkgs.xorg.xsetroot}/bin/xsetroot -solid "#16202a"

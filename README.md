@@ -184,8 +184,12 @@ Operational defaults for this appliance:
 - disables SSH, NetworkManager, onboard Wi-Fi, and onboard Bluetooth
 - rejects USB devices by default with `usbguard`, allowing only YubiKeys,
   USB mass-storage devices, and boot-keyboard-class HID interfaces
-- enables local console autologin for the `operator` account by default for
-  first-boot usability; review and harden that policy before production use
+- auto-logs the `operator` account into a lightweight graphical provisioning
+  wizard that clears the USB ports, generates fresh PIN / PUK / management
+  key material, confirms those values were recorded correctly, waits for a
+  single inserted YubiKey, runs the reviewed `init-root-yubikey` dry-run and
+  destructive apply flow, and leaves the public ceremony artifacts archived
+  locally for export
 
 If you build from a non-`aarch64-linux` host, you will usually need either
 binfmt emulation or an `aarch64-linux` builder available to Nix.

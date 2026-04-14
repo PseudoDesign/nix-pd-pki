@@ -1,8 +1,11 @@
-{ lib, ... }:
+{ lib, pkgs, definitions, ... }:
 let
   operatorHome = "/home/operator";
   operatorSecretsDirectory = "${operatorHome}/secrets";
   rootYubiKeyProfilePath = "/etc/pd-pki/root-yubikey-init-profile.json";
+  pdPkiPackages = import ../packages {
+    inherit pkgs definitions;
+  };
 in
 {
   imports = [ ./rpi5-root-ca-base.nix ];
@@ -33,22 +36,40 @@ in
       PUK_FILE=${operatorSecretsDirectory}/root-puk.txt
       MANAGEMENT_KEY_FILE=${operatorSecretsDirectory}/root-management-key.txt
 
+    The appliance launches the graphical provisioning wizard automatically on boot.
+
     Suggested ceremony flow:
-      1. Review the exported profile JSON
-      2. Run pd-pki-signing-tools init-root-yubikey --dry-run
-      3. Review root-yubikey-init-plan.json in the chosen work directory
-      4. Run the matching apply command with --force-reset and the secret files
-      5. Run pd-pki-signing-tools export-root-inventory from the archived public ceremony directory to removable media
-      6. Normalize it on the development machine with pd-pki-signing-tools normalize-root-inventory
+      1. Follow the on-screen provisioning wizard
+      2. Export root inventory from the archived public ceremony directory to removable media
+      3. Normalize it on the development machine with pd-pki-signing-tools normalize-root-inventory
 
     Temporary debug access is enabled on this image:
       - wired DHCP networking
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    Local console autologin is enabled for the operator account by default.
-    Review and harden the login policy before using this image in production.
+    The operator account auto-logs into the local graphical wizard session.
+    Switch to another VT or use SSH for terminal-based debug access when needed.
   '';
+
+  services.getty.autologinUser = lib.mkForce null;
+
+  services.displayManager = {
+    autoLogin.enable = true;
+    autoLogin.user = "operator";
+    defaultSession = "none+openbox";
+  };
+
+  services.xserver = {
+    enable = true;
+    displayManager.lightdm.enable = true;
+    displayManager.sessionCommands = ''
+      ${pkgs.xorg.xsetroot}/bin/xsetroot -solid "#16202a"
+      ${pkgs.xorg.xset}/bin/xset s off -dpms
+      ${pdPkiPackages.pd-pki-root-yubikey-provisioner-wizard}/bin/pd-pki-root-yubikey-provisioner-wizard &
+    '';
+    windowManager.openbox.enable = true;
+  };
 
   system.nixos.tags = [
     "offline-root-ca"

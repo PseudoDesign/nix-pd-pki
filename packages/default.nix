@@ -31,6 +31,10 @@ let
     inherit pkgs;
   };
 
+  pdPkiRootYubiKeyProvisionerWizard = import ./pd-pki-root-yubikey-provisioner-wizard.nix {
+    inherit pkgs pdPkiSigningTools;
+  };
+
   rolePackages = {
     pd-pki = pkgs.linkFarm "pd-pki" [
       {
@@ -57,6 +61,7 @@ let
     openvpn-client-leaf = openvpnClientLeaf;
     pd-pki-signing-tools = pdPkiSigningTools;
     pd-pki-operator = pdPkiOperator;
+    pd-pki-root-yubikey-provisioner-wizard = pdPkiRootYubiKeyProvisionerWizard;
   };
 
   stepPackages =

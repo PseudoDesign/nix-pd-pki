@@ -673,7 +673,43 @@ $partition_path"
       printf '%s' "$partition_path"
     }
 
-    export_secret_share_bundle() {
+    run_step_with_progress() {
+      local title="$1"
+      local progress_text="$2"
+      shift 2
+      local worker_pid=""
+      local progress_pid=""
+      local status="0"
+
+      "$@" &
+      worker_pid="$!"
+
+      (
+        while kill -0 "$worker_pid" >/dev/null 2>&1; do
+          printf '%s\n' "# $progress_text"
+          sleep "$poll_seconds"
+        done
+        printf '%s\n' "100"
+      ) | zenity --progress \
+        --pulsate \
+        --auto-close \
+        --no-cancel \
+        --width=960 \
+        --height=500 \
+        --title="$title" \
+        --text="$progress_text" &
+      progress_pid="$!"
+
+      if wait "$worker_pid"; then
+        status="0"
+      else
+        status="$?"
+      fi
+      wait "$progress_pid" || true
+      return "$status"
+    }
+
+    perform_secret_share_bundle_export() {
       local share_label="$1"
       local share_position="$2"
       local management_key_share="$3"
@@ -683,12 +719,8 @@ $partition_path"
       local secret_dir="$7"
       local subject="$8"
       local validity_days="$9"
-      local excluded_disk_path="''${10}"
-      local selected_line=""
+      local disk_path="''${10}"
       local share_slug=""
-      local disk_path=""
-      local size=""
-      local description=""
       local partition_path=""
       local mount_path=""
       local bundle_name=""
@@ -700,15 +732,6 @@ $partition_path"
       local management_key_share_file=""
       local exported_at=""
       local volume_label=""
-
-      selected_line="$(choose_usb_disk_for_secret_export "$share_label" "$excluded_disk_path")" || return 1
-      IFS=$'\t' read -r disk_path size description <<EOF
-$selected_line
-EOF
-
-      if ! confirm_secret_export_disk_format "$share_label" "$disk_path" "$size" "$description"; then
-        return 1
-      fi
 
       share_slug="$(printf '%s' "$share_label" | tr '[:upper:]' '[:lower:]')"
       bundle_name="root-yubikey-secret-share-$share_slug-$session_timestamp"
@@ -843,6 +866,51 @@ Bundle path: $target_bundle
 The volume has been unmounted. Remove and seal the flash drive now."
 
       printf '%s' "$disk_path"
+    }
+
+    export_secret_share_bundle() {
+      local share_label="$1"
+      local share_position="$2"
+      local management_key_share="$3"
+      local root_pin="$4"
+      local root_puk="$5"
+      local session_timestamp="$6"
+      local secret_dir="$7"
+      local subject="$8"
+      local validity_days="$9"
+      local excluded_disk_path="''${10}"
+      local selected_line=""
+      local disk_path=""
+      local size=""
+      local description=""
+
+      selected_line="$(choose_usb_disk_for_secret_export "$share_label" "$excluded_disk_path")" || return 1
+      IFS=$'\t' read -r disk_path size description <<EOF
+$selected_line
+EOF
+
+      if ! confirm_secret_export_disk_format "$share_label" "$disk_path" "$size" "$description"; then
+        return 1
+      fi
+
+      run_step_with_progress \
+        "Preparing Custodian $share_label Flash Drive" \
+        "Formatting and writing the flash drive for custodian $share_label.
+
+The wizard is erasing the selected drive, creating a fresh filesystem, copying the secret-share bundle, and unmounting the drive safely.
+
+Please wait and do not remove the drive." \
+        perform_secret_share_bundle_export \
+        "$share_label" \
+        "$share_position" \
+        "$management_key_share" \
+        "$root_pin" \
+        "$root_puk" \
+        "$session_timestamp" \
+        "$secret_dir" \
+        "$subject" \
+        "$validity_days" \
+        "$disk_path"
     }
 
     remove_local_plaintext_secret_files() {

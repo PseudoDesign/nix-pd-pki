@@ -302,7 +302,7 @@ Set the PKCS#11 provider locations expected on the NixOS workstation:
 
 ```bash
 export OPENSSL_MODULES='/run/current-system/sw/lib/ossl-modules'
-export PKCS11_MODULE_PATH='/run/current-system/sw/lib/libykcs11.so'
+export PKCS11_PROVIDER_MODULE='/run/current-system/sw/lib/libykcs11.so'
 ```
 
 Write the PIN to a temporary local file for the OpenSSL PKCS#11 URI:
@@ -339,7 +339,7 @@ Generate the self-signed root CA certificate using the on-token key:
 ```bash
 openssl req -new -x509 \
   -provider default \
-  -provider pkcs11prov \
+  -provider pkcs11 \
   -key "$ROOT_KEY_URI" \
   -subj "$ROOT_SUBJECT" \
   -days "$ROOT_VALID_DAYS" \

@@ -128,8 +128,8 @@ openssl_with_signer_backend() {
       }
       env \
         OPENSSL_MODULES="$PD_PKI_PKCS11_PROVIDER_DIR" \
-        PKCS11_MODULE_PATH="$PD_PKI_PKCS11_MODULE_PATH" \
-        openssl "$@" -provider default -provider pkcs11prov
+        PKCS11_PROVIDER_MODULE="$PD_PKI_PKCS11_MODULE_PATH" \
+        openssl "$@" -provider default -provider pkcs11
       ;;
     *)
       printf '%s\n' "Unsupported signer backend: $signer_backend" >&2

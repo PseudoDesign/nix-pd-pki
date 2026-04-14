@@ -30,7 +30,7 @@ listToAttrs [
       trap 'rm -rf "$workdir"' EXIT
 
       fake_pkcs11_module="$workdir/libykcs11.so"
-      fake_pkcs11_provider_dir="$workdir/ossl-module"
+      fake_pkcs11_provider_dir="$workdir/ossl-modules"
       : > "$fake_pkcs11_module"
       mkdir -p "$fake_pkcs11_provider_dir"
 

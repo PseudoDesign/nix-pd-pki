@@ -242,7 +242,7 @@ in
             type = lib.types.str;
             default = runtimeDefaults.root.pkcs11ProviderDirectory;
             description = ''
-              OpenSSL provider directory that exposes `pkcs11prov` for the offline root tooling.
+              OpenSSL provider directory that exposes the `pkcs11` OpenSSL provider for the offline root tooling.
             '';
           };
 

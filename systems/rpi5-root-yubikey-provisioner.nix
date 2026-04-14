@@ -53,7 +53,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    The dedicated ${ceremonyUser} appliance session account auto-logs into the local graphical wizard session.
+    The dedicated ${ceremonyUser} system session account auto-logs into the local graphical wizard session.
     Switch to another VT or use SSH for terminal-based debug access when needed.
   '';
 
@@ -94,6 +94,20 @@ in
     '';
     windowManager.openbox.enable = true;
   };
+
+  environment.etc."pam.d/lightdm-autologin".text = lib.mkForce ''
+    auth      requisite     pam_nologin.so
+
+    auth      required      pam_succeed_if.so user = ${ceremonyUser} quiet
+    auth      required      pam_permit.so
+
+    account   sufficient    pam_unix.so
+
+    password  requisite     pam_unix.so nullok yescrypt
+
+    session   optional      pam_keyinit.so revoke
+    session   include       login
+  '';
 
   system.nixos.tags = [
     "offline-root-ca"

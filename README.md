@@ -184,7 +184,7 @@ Operational defaults for this appliance:
 - disables SSH, NetworkManager, onboard Wi-Fi, and onboard Bluetooth
 - rejects USB devices by default with `usbguard`, allowing only YubiKeys,
   USB mass-storage devices, and boot-keyboard-class HID interfaces
-- auto-logs a dedicated `pdpki` appliance session account into a lightweight graphical provisioning
+- auto-logs a dedicated `pdpki` system session account into a lightweight graphical provisioning
   wizard that clears the USB ports, generates fresh PIN / PUK / management
   key material, reformats and exports two custodian secret-share bundles to
   separate flash drives, waits for a single inserted YubiKey, runs the reviewed

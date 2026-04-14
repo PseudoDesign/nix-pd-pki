@@ -83,8 +83,8 @@ in
   users.groups.${ceremonyUser} = { };
 
   users.users.${ceremonyUser} = {
-    isNormalUser = true;
-    description = "Offline Root CA Appliance Session";
+    isSystemUser = true;
+    description = "Offline Root CA System Session";
     extraGroups = [ "wheel" ];
     group = ceremonyUser;
     createHome = true;
@@ -138,7 +138,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    Local console autologin is enabled for the dedicated ${ceremonyUser} appliance session account by default.
+    Local console autologin is enabled for the dedicated ${ceremonyUser} system session account by default.
     Review and harden the login policy before using this image in production.
   '';
 

@@ -43,7 +43,7 @@ in
 
     Suggested ceremony flow:
       1. Follow the on-screen provisioning wizard
-      2. Export two custodian secret-share bundles to separate flash drives
+      2. Reformat and export two custodian secret-share bundles to separate flash drives
       3. Export root inventory from the archived public ceremony directory to removable media
       4. Normalize it on the development machine with pd-pki-signing-tools normalize-root-inventory
 
@@ -93,9 +93,6 @@ in
     '';
     windowManager.openbox.enable = true;
   };
-
-  services.devmon.enable = true;
-  services.udisks2.mountOnMedia = true;
 
   system.nixos.tags = [
     "offline-root-ca"

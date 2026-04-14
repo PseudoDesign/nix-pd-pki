@@ -4,11 +4,13 @@ pkgs.writeShellApplication {
   runtimeInputs = [
     pdPkiSigningTools
     pkgs.coreutils
+    pkgs.dosfstools
     pkgs.findutils
     pkgs.gawk
     pkgs.gnugrep
     pkgs.jq
     pkgs.openssl
+    pkgs.parted
     pkgs.procps
     pkgs.sudo
     pkgs.usbutils
@@ -177,30 +179,80 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
       ykman list --serials 2>/dev/null | grep -v '^[[:space:]]*$' || true
     }
 
-    list_usb_mounts() {
-      if ! command -v lsblk >/dev/null 2>&1; then
-        return 0
-      fi
+    block_source_to_disk_path() {
+      local source_path="$1"
+      local parent_name=""
 
-      lsblk -J -o NAME,PATH,PKNAME,RM,TRAN,TYPE,MOUNTPOINTS,LABEL,SERIAL,VENDOR,MODEL,SIZE 2>/dev/null |
+      [ -b "$source_path" ] || return 0
+      parent_name="$(lsblk -ndo PKNAME "$source_path" 2>/dev/null || true)"
+      if [ -n "$parent_name" ]; then
+        printf '/dev/%s' "$parent_name"
+      else
+        printf '%s' "$source_path"
+      fi
+    }
+
+    list_system_disk_paths() {
+      local mount_path=""
+      local source_path=""
+      local disk_path=""
+
+      for mount_path in / /boot /boot/efi /boot/firmware; do
+        source_path="$(findmnt -n -o SOURCE --target "$mount_path" 2>/dev/null || true)"
+        [ -n "$source_path" ] || continue
+        disk_path="$(block_source_to_disk_path "$source_path")"
+        [ -n "$disk_path" ] || continue
+        printf '%s\n' "$disk_path"
+      done | sort -u
+    }
+
+    path_is_listed() {
+      local needle="$1"
+      shift
+      local candidate=""
+
+      for candidate in "$@"; do
+        if [ "$candidate" = "$needle" ]; then
+          return 0
+        fi
+      done
+      return 1
+    }
+
+    list_usb_export_disks() {
+      local excluded_disk_path="$1"
+      local disk_path=""
+      local size=""
+      local description=""
+      local -a system_disks=()
+
+      mapfile -t system_disks < <(list_system_disk_paths)
+
+      lsblk -J -o PATH,RM,TRAN,TYPE,SIZE,LABEL,SERIAL,VENDOR,MODEL 2>/dev/null |
         jq -r '
-          def mounts:
-            (.mountpoints // []) | map(select(. != null and . != ""));
           [
-            .blockdevices[]? | recurse(.children[]?)
+            .blockdevices[]?
+            | select(.type == "disk")
             | select(((.tran // "") == "usb") or (((.rm // 0) | tostring) == "1"))
-            | mounts[]? as $mount
             | [
-                $mount,
-                (.path // ("/dev/" + (.name // ""))),
-                (.label // ""),
-                ([.vendor // "", .model // "", .serial // "", .size // ""] | map(select(. != "")) | join(" ")),
-                (if (.pkname // "") != "" then "/dev/" + .pkname else (.path // ("/dev/" + (.name // ""))) end)
+                (.path // ""),
+                (.size // ""),
+                ([.vendor // "", .model // "", .serial // "", .label // ""] | map(select(. != "")) | join(" "))
               ]
             | @tsv
-          ]
-          | unique[]
-        ' 2>/dev/null || true
+          ][]
+        ' 2>/dev/null |
+        while IFS=$'\t' read -r disk_path size description; do
+          [ -n "$disk_path" ] || continue
+          if [ -n "$excluded_disk_path" ] && [ "$disk_path" = "$excluded_disk_path" ]; then
+            continue
+          fi
+          if path_is_listed "$disk_path" "''${system_disks[@]}"; then
+            continue
+          fi
+          [ -n "$description" ] || description="$disk_path"
+          printf '%s\t%s\t%s\n' "$disk_path" "$size" "$description"
+        done
     }
 
     wait_for_usb_clear() {
@@ -320,52 +372,34 @@ The wizard will continue automatically when exactly one token is detected."
       )
     }
 
-    choose_usb_mount_for_secret_export() {
+    choose_usb_disk_for_secret_export() {
       local share_label="$1"
       local excluded_disk_path="$2"
-      local mount_path=""
-      local device_path=""
-      local label=""
-      local description=""
       local disk_path=""
+      local size=""
+      local description=""
       local line=""
       local choice=""
-      local -a usb_lines=()
-      local -a progress_usb_lines=()
+      local -a disk_lines=()
+      local -a progress_disk_lines=()
       local -a rows=()
 
       while true; do
-        mapfile -t usb_lines < <(
-          while IFS=$'\t' read -r mount_path device_path label description disk_path; do
-            [ -n "$mount_path" ] || continue
-            if [ -n "$excluded_disk_path" ] && [ "$disk_path" = "$excluded_disk_path" ]; then
-              continue
-            fi
-            printf '%s\t%s\t%s\t%s\t%s\n' "$mount_path" "$device_path" "$label" "$description" "$disk_path"
-          done < <(list_usb_mounts)
-        )
+        mapfile -t disk_lines < <(list_usb_export_disks "$excluded_disk_path")
 
-        if [ "''${#usb_lines[@]}" -eq 0 ]; then
+        if [ "''${#disk_lines[@]}" -eq 0 ]; then
           (
             while true; do
-              mapfile -t progress_usb_lines < <(
-                while IFS=$'\t' read -r mount_path device_path label description disk_path; do
-                  [ -n "$mount_path" ] || continue
-                  if [ -n "$excluded_disk_path" ] && [ "$disk_path" = "$excluded_disk_path" ]; then
-                    continue
-                  fi
-                  printf '%s\t%s\t%s\t%s\t%s\n' "$mount_path" "$device_path" "$label" "$description" "$disk_path"
-                done < <(list_usb_mounts)
-              )
-              if [ "''${#progress_usb_lines[@]}" -gt 0 ]; then
-                printf '%s\n' "# Mounted removable media detected. Continuing..."
+              mapfile -t progress_disk_lines < <(list_usb_export_disks "$excluded_disk_path")
+              if [ "''${#progress_disk_lines[@]}" -gt 0 ]; then
+                printf '%s\n' "# Removable media detected. Continuing..."
                 printf '%s\n' "100"
                 break
               fi
 
               printf '%s\n' "# Insert the USB flash drive for custodian $share_label.
 
-The wizard will export the PIN, the PUK, and management key share $share_label after the drive mounts automatically.
+The wizard will format the selected drive before writing the PIN, the PUK, and management key share $share_label.
 
 Use a different flash drive for each custodian."
               sleep "$poll_seconds"
@@ -377,23 +411,22 @@ Use a different flash drive for each custodian."
             --width=960 \
             --height=500 \
             --title="Insert Flash Drive For Custodian $share_label" \
-            --text="Waiting for mounted removable media..."
+            --text="Waiting for removable media..."
           continue
         fi
 
-        if [ "''${#usb_lines[@]}" -eq 1 ]; then
-          printf '%s' "''${usb_lines[0]}"
+        if [ "''${#disk_lines[@]}" -eq 1 ]; then
+          printf '%s' "''${disk_lines[0]}"
           return 0
         fi
 
         rows=()
-        for line in "''${usb_lines[@]}"; do
-          IFS=$'\t' read -r mount_path device_path label description disk_path <<EOF
+        for line in "''${disk_lines[@]}"; do
+          IFS=$'\t' read -r disk_path size description <<EOF
 $line
 EOF
-          [ -n "$label" ] || label="(unlabeled)"
-          [ -n "$description" ] || description="$device_path"
-          rows+=("$mount_path" "$device_path" "$label" "$description")
+          [ -n "$description" ] || description="$disk_path"
+          rows+=("$disk_path" "$size" "$description")
         done
 
         choice="$(
@@ -401,24 +434,155 @@ EOF
             --width=1100 \
             --height=520 \
             --title="Choose Flash Drive For Custodian $share_label" \
-            --text="Multiple mounted removable volumes are available. Choose the destination for custodian $share_label." \
-            --column="Mount Path" \
-            --column="Device" \
-            --column="Label" \
+            --text="Multiple removable disks are available. Choose the disk to format for custodian $share_label." \
+            --column="Disk" \
+            --column="Size" \
             --column="Details" \
             "''${rows[@]}"
         )" || return 1
 
-        for line in "''${usb_lines[@]}"; do
-          IFS=$'\t' read -r mount_path device_path label description disk_path <<EOF
+        for line in "''${disk_lines[@]}"; do
+          IFS=$'\t' read -r disk_path size description <<EOF
 $line
 EOF
-          if [ "$mount_path" = "$choice" ]; then
+          if [ "$disk_path" = "$choice" ]; then
             printf '%s' "$line"
             return 0
           fi
         done
       done
+    }
+
+    confirm_secret_export_disk_format() {
+      local share_label="$1"
+      local disk_path="$2"
+      local size="$3"
+      local description="$4"
+
+      confirm_step \
+        "Confirm Drive Format For Custodian $share_label" \
+        "Format And Export" \
+        "Cancel" \
+        "The selected flash drive will be reformatted before the secret-share bundle is written.
+
+All existing data on this drive will be permanently destroyed.
+
+Custodian: $share_label
+Disk: $disk_path
+Size: $size
+Details: $description
+
+Continue only if this is the correct flash drive for custodian $share_label."
+    }
+
+    list_disk_mount_paths() {
+      local disk_path="$1"
+
+      lsblk -J -o PATH,TYPE,MOUNTPOINTS "$disk_path" 2>/dev/null |
+        jq -r '
+          .blockdevices[]? | recurse(.children[]?)
+          | (.mountpoints // [])[]?
+          | select(. != null and . != "")
+        ' 2>/dev/null |
+        awk '{ print length, $0 }' |
+        sort -rn |
+        cut -d" " -f2-
+    }
+
+    unmount_disk_mount_paths() {
+      local disk_path="$1"
+      local mount_path=""
+
+      while IFS= read -r mount_path; do
+        [ -n "$mount_path" ] || continue
+        sudo -n umount "$mount_path"
+      done < <(list_disk_mount_paths "$disk_path")
+    }
+
+    first_partition_path_for_disk() {
+      local disk_path="$1"
+
+      lsblk -J -o PATH,TYPE "$disk_path" 2>/dev/null |
+        jq -r '
+          .blockdevices[]?.children[]?
+          | select(.type == "part")
+          | .path
+        ' 2>/dev/null |
+        head -n 1
+    }
+
+    wait_for_partition_path() {
+      local disk_path="$1"
+      local partition_path=""
+      local retries_remaining="10"
+
+      while [ "$retries_remaining" -gt 0 ]; do
+        partition_path="$(first_partition_path_for_disk "$disk_path" || true)"
+        if [ -n "$partition_path" ]; then
+          printf '%s' "$partition_path"
+          return 0
+        fi
+        retries_remaining="$((retries_remaining - 1))"
+        sleep 1
+      done
+
+      return 1
+    }
+
+    format_and_mount_secret_export_disk() {
+      local share_label="$1"
+      local disk_path="$2"
+      local mount_path="$3"
+      local volume_label="$4"
+      local partition_path=""
+
+      unmount_disk_mount_paths "$disk_path" || {
+        show_error "Share Export Failed" "The selected flash drive could not be unmounted before formatting:
+$disk_path"
+        return 1
+      }
+
+      if ! sudo -n wipefs -af "$disk_path" >/dev/null 2>&1; then
+        show_error "Share Export Failed" "The selected flash drive could not be prepared for formatting:
+$disk_path"
+        return 1
+      fi
+
+      if ! sudo -n parted -s "$disk_path" mklabel gpt; then
+        show_error "Share Export Failed" "The selected flash drive could not be repartitioned:
+$disk_path"
+        return 1
+      fi
+
+      if ! sudo -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
+        show_error "Share Export Failed" "The FAT32 partition could not be created on:
+$disk_path"
+        return 1
+      fi
+
+      sudo -n partprobe "$disk_path" >/dev/null 2>&1 || true
+
+      partition_path="$(wait_for_partition_path "$disk_path")" || {
+        show_error "Share Export Failed" "The new partition did not appear after formatting:
+$disk_path"
+        return 1
+      }
+
+      if ! sudo -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path" >/dev/null; then
+        show_error "Share Export Failed" "The new FAT32 filesystem could not be created on:
+$partition_path"
+        return 1
+      fi
+
+      install -d -m 700 "$mount_path"
+      if ! sudo -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
+        rmdir "$mount_path" 2>/dev/null || true
+        show_error "Share Export Failed" "The freshly formatted flash drive for custodian $share_label could not be mounted:
+$partition_path"
+        return 1
+      fi
+
+      printf '%s' "$partition_path"
     }
 
     export_secret_share_bundle() {
@@ -434,11 +598,11 @@ EOF
       local excluded_disk_path="''${10}"
       local selected_line=""
       local share_slug=""
-      local mount_path=""
-      local device_path=""
-      local label=""
-      local description=""
       local disk_path=""
+      local size=""
+      local description=""
+      local partition_path=""
+      local mount_path=""
       local bundle_name=""
       local bundle_stage_root=""
       local bundle_stage_path=""
@@ -447,21 +611,33 @@ EOF
       local export_record_path=""
       local management_key_share_file=""
       local exported_at=""
+      local volume_label=""
 
-      selected_line="$(choose_usb_mount_for_secret_export "$share_label" "$excluded_disk_path")" || return 1
-      IFS=$'\t' read -r mount_path device_path label description disk_path <<EOF
+      selected_line="$(choose_usb_disk_for_secret_export "$share_label" "$excluded_disk_path")" || return 1
+      IFS=$'\t' read -r disk_path size description <<EOF
 $selected_line
 EOF
+
+      if ! confirm_secret_export_disk_format "$share_label" "$disk_path" "$size" "$description"; then
+        return 1
+      fi
 
       share_slug="$(printf '%s' "$share_label" | tr '[:upper:]' '[:lower:]')"
       bundle_name="root-yubikey-secret-share-$share_slug-$session_timestamp"
       bundle_stage_root="$(mktemp -d "/tmp/$bundle_name.XXXXXX")"
       bundle_stage_path="$bundle_stage_root/$bundle_name"
+      mount_path="$bundle_stage_root/mount"
       target_parent="$mount_path/pd-pki-transfer/root-secret-shares"
       target_bundle="$target_parent/$bundle_name"
       export_record_path="$secret_dir/share-$share_slug-export.json"
       management_key_share_file="root-management-key-share-$share_slug.txt"
       exported_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+      volume_label="$(printf 'PDRT%s' "$share_label" | tr '[:lower:]' '[:upper:]')"
+
+      partition_path="$(format_and_mount_secret_export_disk "$share_label" "$disk_path" "$mount_path" "$volume_label")" || {
+        rm -rf "$bundle_stage_root"
+        return 1
+      }
 
       install -d -m 700 "$bundle_stage_path"
       write_secret_file "$bundle_stage_path/root-pin.txt" "$root_pin"
@@ -522,16 +698,18 @@ $target_bundle"
         return 1
       fi
 
-      if ! sudo -n mkdir -p "$target_parent"; then
+      if ! mkdir -p "$target_parent"; then
         show_error "Share Export Failed" "The destination path could not be created:
 $target_parent"
+        sudo -n umount "$mount_path" >/dev/null 2>&1 || true
         rm -rf "$bundle_stage_root"
         return 1
       fi
 
-      if ! sudo -n cp -R "$bundle_stage_path" "$target_parent/"; then
+      if ! cp -R "$bundle_stage_path" "$target_parent/"; then
         show_error "Share Export Failed" "The secret share for custodian $share_label could not be copied to:
 $target_parent"
+        sudo -n umount "$mount_path" >/dev/null 2>&1 || true
         rm -rf "$bundle_stage_root"
         return 1
       fi
@@ -540,9 +718,10 @@ $target_parent"
         --arg exportedAt "$exported_at" \
         --arg shareId "$share_label" \
         --arg mountPath "$mount_path" \
-        --arg devicePath "$device_path" \
+        --arg devicePath "$partition_path" \
         --arg diskPath "$disk_path" \
         --arg bundlePath "$target_bundle" \
+        --arg filesystemLabel "$volume_label" \
         '{
           schemaVersion: 1,
           profile: "root-yubikey-secret-share-export-record",
@@ -551,7 +730,8 @@ $target_parent"
           mountPath: $mountPath,
           devicePath: $devicePath,
           diskPath: $diskPath,
-          bundlePath: $bundlePath
+          bundlePath: $bundlePath,
+          filesystemLabel: $filesystemLabel
         }' > "$export_record_path"
 
       sync
@@ -566,8 +746,11 @@ $mount_path"
 
       show_info \
         "Custodian $share_label Exported" \
-        "The secret-share bundle for custodian $share_label has been written to:
-$target_bundle
+        "The flash drive for custodian $share_label was reformatted and the secret-share bundle was written successfully.
+
+Disk: $disk_path
+Filesystem label: $volume_label
+Bundle path: $target_bundle
 
 The volume has been unmounted. Remove and seal the flash drive now."
 
@@ -741,6 +924,13 @@ Next steps:
 
       require_command jq
       require_command lsblk
+      require_command findmnt
+      require_command wipefs
+      require_command parted
+      require_command partprobe
+      require_command mkfs.vfat
+      require_command mount
+      require_command umount
       require_command pd-pki-signing-tools
       require_command sudo
       require_command ykman
@@ -792,6 +982,8 @@ The next two steps will export:
 - one half of the management key
 
 to two separate USB flash drives, one for each custodian.
+
+Each flash drive will be reformatted immediately before its share bundle is written.
 
 Remove and seal each flash drive after export."
 

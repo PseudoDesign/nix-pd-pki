@@ -186,8 +186,8 @@ Operational defaults for this appliance:
   USB mass-storage devices, and boot-keyboard-class HID interfaces
 - auto-logs the `operator` account into a lightweight graphical provisioning
   wizard that clears the USB ports, generates fresh PIN / PUK / management
-  key material, exports two custodian secret-share bundles to separate flash
-  drives, waits for a single inserted YubiKey, runs the reviewed
+  key material, reformats and exports two custodian secret-share bundles to
+  separate flash drives, waits for a single inserted YubiKey, runs the reviewed
   `init-root-yubikey` dry-run and destructive apply flow, and leaves the
   public ceremony artifacts archived locally for export
 

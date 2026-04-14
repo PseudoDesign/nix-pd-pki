@@ -1133,7 +1133,7 @@ $profile_path"
         exit 1
       }
 
-      install -d -m 700 "$sessions_root" "$secrets_root" "$archives_root"
+      install -d -m 700 "$sessions_root" "$secrets_root"
       subject="$(jq -r '.subject' "$profile_path")"
       validity_days="$(jq -r '.validityDays' "$profile_path")"
 

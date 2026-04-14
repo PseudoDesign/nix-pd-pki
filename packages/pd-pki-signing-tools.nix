@@ -2091,14 +2091,19 @@ EOF
 
       export PD_PKI_PKCS11_ENGINE_DIR="${pkgs.libp11}/lib/engines"
       export PD_PKI_PKCS11_MODULE_PATH="$pkcs11_module_path"
-      if ! openssl_with_signer_backend pkcs11 req -new -x509 \
-        -key "$key_uri_with_pin" \
-        -subj "$subject" \
-        -days "$validity_days" \
-        "-$digest" \
-        -extensions v3_root_ca \
-        -config "$openssl_config_path" \
-        -out "$certificate_path"; then
+      if ! env \
+        OPENSSL_ENGINES="${pkgs.libp11}/lib/engines" \
+        PKCS11_MODULE_PATH="$pkcs11_module_path" \
+        openssl x509 -new \
+          -engine pkcs11 \
+          -keyform ENGINE \
+          -key "$key_uri_with_pin" \
+          -subj "$subject" \
+          -days "$validity_days" \
+          "-$digest" \
+          -extfile "$openssl_config_path" \
+          -extensions v3_root_ca \
+          -out "$certificate_path"; then
         rm -f "$pin_source_file"
         die "Failed to generate the self-signed root certificate through the YubiKey PKCS#11 key"
       fi

@@ -365,15 +365,15 @@ EOF
 Generate the self-signed root CA certificate using the on-token key:
 
 ```bash
-openssl req -new -x509 \
+openssl x509 -new \
   -engine pkcs11 \
   -keyform ENGINE \
   -key "$ROOT_KEY_URI" \
   -subj "$ROOT_SUBJECT" \
   -days "$ROOT_VALID_DAYS" \
   -sha384 \
+  -extfile "$WORKDIR/root-ca-openssl.cnf" \
   -extensions v3_root_ca \
-  -config "$WORKDIR/root-ca-openssl.cnf" \
   -out "$WORKDIR/root-ca.cert.pem"
 ```
 

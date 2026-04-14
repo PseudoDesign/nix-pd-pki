@@ -39,6 +39,32 @@ EOF
 
     openssl req -new -x509 -days 3650 -subj /CN=SoftHSM-Test-Issuer -engine pkcs11 -keyform ENGINE -key "$issuer_key_uri" -out "$workdir/issuer.cert.pem" >/dev/null 2>&1
 
+    pkcs11-tool --module "$module_path" --token-label signer-token --login --pin "$(tr -d '\n' < "$pin_file")" --keypairgen --key-type EC:secp384r1 --id 02 --label ec-root >/dev/null
+    ec_root_key_uri="$(
+      pkcs11-tool --module "$module_path" --login --pin "$(tr -d '\n' < "$pin_file")" --list-objects --type privkey |
+        awk '/^[[:space:]]+uri:/ && /id=%02/ && /type=private/ { sub(/^[[:space:]]+uri:[[:space:]]*/, ""); print; exit }'
+    );pin-source=file:$pin_file"
+
+    cat > "$workdir/root.ext" <<EOF
+[ v3_root_ca ]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+EOF
+
+    openssl x509 -new \
+      -engine pkcs11 \
+      -keyform ENGINE \
+      -key "$ec_root_key_uri" \
+      -subj /CN=SoftHSM-Test-EC-Root \
+      -days 3650 \
+      -sha384 \
+      -extfile "$workdir/root.ext" \
+      -extensions v3_root_ca \
+      -out "$workdir/ec-root.cert.pem" >/dev/null 2>&1
+    openssl verify -CAfile "$workdir/ec-root.cert.pem" "$workdir/ec-root.cert.pem" >/dev/null
+
     cat > "$workdir/server.req.conf" <<EOF
 [ req ]
 distinguished_name = dn

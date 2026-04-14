@@ -529,33 +529,66 @@ Continue only if this is the correct flash drive for custodian $share_label."
       return 1
     }
 
+    run_logged_retry_command() {
+      local log_path="$1"
+      local retries_remaining="$2"
+      shift 2
+      local status="0"
+      local argument=""
+
+      : > "$log_path"
+      while [ "$retries_remaining" -gt 0 ]; do
+        {
+          printf 'Attempt %s\n' "$((6 - retries_remaining))"
+          printf '$'
+          for argument in "$@"; do
+            printf ' %q' "$argument"
+          done
+          printf '\n'
+          "$@"
+        } >> "$log_path" 2>&1 && return 0
+
+        status="$?"
+        printf 'exit=%s\n\n' "$status" >> "$log_path"
+        retries_remaining="$((retries_remaining - 1))"
+        [ "$retries_remaining" -gt 0 ] || return "$status"
+        sleep 1
+      done
+
+      return "$status"
+    }
+
     format_and_mount_secret_export_disk() {
       local share_label="$1"
       local disk_path="$2"
       local mount_path="$3"
       local volume_label="$4"
       local partition_path=""
+      local format_log=""
+
+      format_log="$(mktemp "/tmp/pd-pki-secret-share-format-$share_label.XXXXXX.log")"
 
       unmount_disk_mount_paths "$disk_path" || {
         show_error "Share Export Failed" "The selected flash drive could not be unmounted before formatting:
 $disk_path"
+        rm -f "$format_log"
         return 1
       }
 
-      if ! sudo -n wipefs -af "$disk_path" >/dev/null 2>&1; then
-        show_error "Share Export Failed" "The selected flash drive could not be prepared for formatting:
+      if ! run_logged_retry_command "$format_log" "5" sudo -n wipefs -af "$disk_path"; then
+        show_command_failure "Share Export Failed" "$format_log" "The selected flash drive could not be prepared for formatting:
 $disk_path"
         return 1
       fi
 
-      if ! sudo -n parted -s "$disk_path" mklabel gpt; then
-        show_error "Share Export Failed" "The selected flash drive could not be repartitioned:
+      if ! run_logged_retry_command "$format_log" "5" sudo -n parted -s "$disk_path" mklabel gpt; then
+        show_command_failure "Share Export Failed" "$format_log" "The selected flash drive could not be repartitioned:
 $disk_path"
         return 1
       fi
 
-      if ! sudo -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
-        show_error "Share Export Failed" "The FAT32 partition could not be created on:
+      if ! run_logged_retry_command "$format_log" "5" sudo -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
+        show_command_failure "Share Export Failed" "$format_log" "The FAT32 partition could not be created on:
 $disk_path"
         return 1
       fi
@@ -563,25 +596,26 @@ $disk_path"
       sudo -n partprobe "$disk_path" >/dev/null 2>&1 || true
 
       partition_path="$(wait_for_partition_path "$disk_path")" || {
-        show_error "Share Export Failed" "The new partition did not appear after formatting:
+        show_command_failure "Share Export Failed" "$format_log" "The new partition did not appear after formatting:
 $disk_path"
         return 1
       }
 
-      if ! sudo -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path" >/dev/null; then
-        show_error "Share Export Failed" "The new FAT32 filesystem could not be created on:
+      if ! run_logged_retry_command "$format_log" "5" sudo -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path"; then
+        show_command_failure "Share Export Failed" "$format_log" "The new FAT32 filesystem could not be created on:
 $partition_path"
         return 1
       fi
 
       install -d -m 700 "$mount_path"
-      if ! sudo -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
+      if ! run_logged_retry_command "$format_log" "5" sudo -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
         rmdir "$mount_path" 2>/dev/null || true
-        show_error "Share Export Failed" "The freshly formatted flash drive for custodian $share_label could not be mounted:
+        show_command_failure "Share Export Failed" "$format_log" "The freshly formatted flash drive for custodian $share_label could not be mounted:
 $partition_path"
         return 1
       fi
 
+      rm -f "$format_log"
       printf '%s' "$partition_path"
     }
 

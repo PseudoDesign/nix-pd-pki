@@ -224,10 +224,30 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
       return 1
     }
 
+    disk_identity_for_usb_export_disk() {
+      local serial="$1"
+      local vendor="$2"
+      local model="$3"
+      local size="$4"
+      local disk_path="$5"
+
+      if [ -n "$serial" ]; then
+        printf 'serial:%s' "$serial"
+      elif [ -n "$vendor$model$size" ]; then
+        printf 'descriptor:%s|%s|%s' "$vendor" "$model" "$size"
+      else
+        printf 'path:%s' "$disk_path"
+      fi
+    }
+
     list_usb_export_disks() {
-      local excluded_disk_path="$1"
+      local excluded_disk_identity="$1"
       local disk_path=""
+      local disk_identity=""
       local size=""
+      local serial=""
+      local vendor=""
+      local model=""
       local description=""
       local -a system_disks=()
 
@@ -242,21 +262,25 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
             | [
                 (.path // ""),
                 (.size // ""),
+                (.serial // ""),
+                (.vendor // ""),
+                (.model // ""),
                 ([.vendor // "", .model // "", .serial // "", .label // ""] | map(select(. != "")) | join(" "))
               ]
             | @tsv
           ][]
         ' 2>/dev/null |
-        while IFS=$'\t' read -r disk_path size description; do
+        while IFS=$'\t' read -r disk_path size serial vendor model description; do
           [ -n "$disk_path" ] || continue
-          if [ -n "$excluded_disk_path" ] && [ "$disk_path" = "$excluded_disk_path" ]; then
-            continue
-          fi
           if path_is_listed "$disk_path" "''${system_disks[@]}"; then
             continue
           fi
+          disk_identity="$(disk_identity_for_usb_export_disk "$serial" "$vendor" "$model" "$size" "$disk_path")"
+          if [ -n "$excluded_disk_identity" ] && [ "$disk_identity" = "$excluded_disk_identity" ]; then
+            continue
+          fi
           [ -n "$description" ] || description="$disk_path"
-          printf '%s\t%s\t%s\n' "$disk_path" "$size" "$description"
+          printf '%s\t%s\t%s\t%s\n' "$disk_path" "$disk_identity" "$size" "$description"
         done
     }
 
@@ -379,8 +403,9 @@ The wizard will continue automatically when exactly one token is detected."
 
     choose_usb_disk_for_secret_export() {
       local share_label="$1"
-      local excluded_disk_path="$2"
+      local excluded_disk_identity="$2"
       local disk_path=""
+      local disk_identity=""
       local size=""
       local description=""
       local line=""
@@ -390,12 +415,12 @@ The wizard will continue automatically when exactly one token is detected."
       local -a rows=()
 
       while true; do
-        mapfile -t disk_lines < <(list_usb_export_disks "$excluded_disk_path")
+        mapfile -t disk_lines < <(list_usb_export_disks "$excluded_disk_identity")
 
         if [ "''${#disk_lines[@]}" -eq 0 ]; then
           (
             while true; do
-              mapfile -t progress_disk_lines < <(list_usb_export_disks "$excluded_disk_path")
+              mapfile -t progress_disk_lines < <(list_usb_export_disks "$excluded_disk_identity")
               if [ "''${#progress_disk_lines[@]}" -gt 0 ]; then
                 printf '%s\n' "# Removable media detected. Continuing..."
                 printf '%s\n' "100"
@@ -427,7 +452,7 @@ Use a different flash drive for each custodian."
 
         rows=()
         for line in "''${disk_lines[@]}"; do
-          IFS=$'\t' read -r disk_path size description <<EOF
+          IFS=$'\t' read -r disk_path disk_identity size description <<EOF
 $line
 EOF
           [ -n "$description" ] || description="$disk_path"
@@ -447,7 +472,7 @@ EOF
         )" || return 1
 
         for line in "''${disk_lines[@]}"; do
-          IFS=$'\t' read -r disk_path size description <<EOF
+          IFS=$'\t' read -r disk_path disk_identity size description <<EOF
 $line
 EOF
           if [ "$disk_path" = "$choice" ]; then
@@ -864,8 +889,6 @@ Filesystem label: $volume_label
 Bundle path: $target_bundle
 
 The volume has been unmounted. Remove and seal the flash drive now."
-
-      printf '%s' "$disk_path"
     }
 
     export_secret_share_bundle() {
@@ -878,14 +901,15 @@ The volume has been unmounted. Remove and seal the flash drive now."
       local secret_dir="$7"
       local subject="$8"
       local validity_days="$9"
-      local excluded_disk_path="''${10}"
+      local excluded_disk_identity="''${10}"
       local selected_line=""
       local disk_path=""
+      local disk_identity=""
       local size=""
       local description=""
 
-      selected_line="$(choose_usb_disk_for_secret_export "$share_label" "$excluded_disk_path")" || return 1
-      IFS=$'\t' read -r disk_path size description <<EOF
+      selected_line="$(choose_usb_disk_for_secret_export "$share_label" "$excluded_disk_identity")" || return 1
+      IFS=$'\t' read -r disk_path disk_identity size description <<EOF
 $selected_line
 EOF
 
@@ -911,6 +935,8 @@ Please wait and do not remove the drive." \
         "$subject" \
         "$validity_days" \
         "$disk_path"
+
+      printf '%s' "$disk_identity"
     }
 
     remove_local_plaintext_secret_files() {
@@ -1076,7 +1102,7 @@ Next steps:
       local management_key_file=""
       local dry_run_log=""
       local apply_log=""
-      local share_a_disk_path=""
+      local share_a_disk_identity=""
 
       require_command jq
       require_command lsblk
@@ -1159,7 +1185,7 @@ Each flash drive will be reformatted immediately before its share bundle is writ
 
 Remove and seal each flash drive after export."
 
-      share_a_disk_path="$(
+      share_a_disk_identity="$(
         export_secret_share_bundle \
           "A" \
           "first-half" \
@@ -1185,7 +1211,7 @@ Remove and seal each flash drive after export."
         "$secret_dir" \
         "$subject" \
         "$validity_days" \
-        "$share_a_disk_path" >/dev/null || exit 1
+        "$share_a_disk_identity" >/dev/null || exit 1
 
       wait_for_usb_clear
 

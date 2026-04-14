@@ -53,7 +53,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    The ${ceremonyUser} system account auto-logs into the local graphical wizard session.
+    The dedicated ${ceremonyUser} appliance session account auto-logs into the local graphical wizard session.
     Switch to another VT or use SSH for terminal-based debug access when needed.
   '';
 

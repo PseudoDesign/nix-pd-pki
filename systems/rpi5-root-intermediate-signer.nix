@@ -40,7 +40,7 @@ in
       - OpenSSH on TCP 22
       - adam account with imported authorized_keys
 
-    Local console autologin is enabled for the ${ceremonyUser} system account by default.
+    Local console autologin is enabled for the dedicated ${ceremonyUser} appliance session account by default.
     Review and harden the login policy before using this image in production.
   '';
 

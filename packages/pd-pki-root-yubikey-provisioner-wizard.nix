@@ -962,14 +962,33 @@ EOF
       local title="$1"
       local log_path="$2"
       local summary="$3"
+      local detail="$summary"
+      local excerpt=""
 
-      show_error "$title" "$summary"
+      if [ -n "$log_path" ]; then
+        detail="$detail
+
+Log path:
+$log_path"
+      fi
+
+      if [ -f "$log_path" ]; then
+        excerpt="$(tail -n 40 "$log_path" 2>/dev/null || true)"
+        if [ -n "$excerpt" ]; then
+          detail="$detail
+
+Recent log lines:
+$excerpt"
+        fi
+      fi
+
+      show_error "$title" "$detail" || true
       if [ -f "$log_path" ]; then
         zenity --text-info \
           --width=1100 \
           --height=720 \
           --title="$title Log" \
-          --filename="$log_path"
+          --filename="$log_path" || true
       fi
     }
 
@@ -981,13 +1000,24 @@ EOF
       local command_pid=""
       local progress_pid=""
       local status="0"
+      local live_progress_text=""
+      local touch_line=""
 
       "$@" > "$log_path" 2>&1 &
       command_pid="$!"
 
       (
         while kill -0 "$command_pid" >/dev/null 2>&1; do
-          printf '%s\n' "# $progress_text"
+          live_progress_text="$progress_text"
+          if [ -f "$log_path" ]; then
+            touch_line="$(grep -E 'Touch your YubiKey|Touch not detected' "$log_path" 2>/dev/null | tail -n1 || true)"
+            if [ -n "$touch_line" ]; then
+              live_progress_text="Touch the YubiKey now.
+
+$touch_line"
+            fi
+          fi
+          printf '%s\n' "# $live_progress_text"
           sleep "$poll_seconds"
         done
         printf '%s\n' "100"

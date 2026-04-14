@@ -242,7 +242,7 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
     }
 
     list_usb_export_disks() {
-      local excluded_disk_identity="$1"
+      local -a excluded_disk_identities=("$@")
       local disk_path=""
       local disk_identity=""
       local size=""
@@ -277,7 +277,7 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
             continue
           fi
           disk_identity="$(disk_identity_for_usb_export_disk "$serial" "$vendor" "$model" "$size" "$disk_path")"
-          if [ -n "$excluded_disk_identity" ] && [ "$disk_identity" = "$excluded_disk_identity" ]; then
+          if [ "''${#excluded_disk_identities[@]}" -gt 0 ] && path_is_listed "$disk_identity" "''${excluded_disk_identities[@]}"; then
             continue
           fi
           [ -n "$description" ] || description="$disk_path"
@@ -378,6 +378,15 @@ The wizard will continue automatically when exactly one token is detected."
       openssl rand -hex 32 | tr '[:lower:]' '[:upper:]'
     }
 
+    root_id_from_certificate() {
+      local certificate_path="$1"
+
+      openssl x509 -in "$certificate_path" -noout -fingerprint -sha256 |
+        cut -d= -f2 |
+        tr -d ':' |
+        tr '[:upper:]' '[:lower:]'
+    }
+
     generate_credentials() {
       local pin=""
       local puk=""
@@ -404,7 +413,8 @@ The wizard will continue automatically when exactly one token is detected."
 
     choose_usb_disk_for_secret_export() {
       local share_label="$1"
-      local excluded_disk_identity="$2"
+      shift
+      local -a excluded_disk_identities=("$@")
       local disk_path=""
       local disk_identity=""
       local size=""
@@ -416,12 +426,12 @@ The wizard will continue automatically when exactly one token is detected."
       local -a rows=()
 
       while true; do
-        mapfile -t disk_lines < <(list_usb_export_disks "$excluded_disk_identity")
+        mapfile -t disk_lines < <(list_usb_export_disks "''${excluded_disk_identities[@]}")
 
         if [ "''${#disk_lines[@]}" -eq 0 ]; then
           (
             while true; do
-              mapfile -t progress_disk_lines < <(list_usb_export_disks "$excluded_disk_identity")
+              mapfile -t progress_disk_lines < <(list_usb_export_disks "''${excluded_disk_identities[@]}")
               if [ "''${#progress_disk_lines[@]}" -gt 0 ]; then
                 printf '%s\n' "# Removable media detected. Continuing..."
                 printf '%s\n' "100"
@@ -484,6 +494,88 @@ EOF
       done
     }
 
+    choose_usb_disk_for_public_inventory_export() {
+      local excluded_disk_identity_a="$1"
+      local excluded_disk_identity_b="$2"
+      local disk_path=""
+      local disk_identity=""
+      local size=""
+      local description=""
+      local line=""
+      local choice=""
+      local -a disk_lines=()
+      local -a progress_disk_lines=()
+      local -a rows=()
+
+      while true; do
+        mapfile -t disk_lines < <(list_usb_export_disks "$excluded_disk_identity_a" "$excluded_disk_identity_b")
+
+        if [ "''${#disk_lines[@]}" -eq 0 ]; then
+          (
+            while true; do
+              mapfile -t progress_disk_lines < <(list_usb_export_disks "$excluded_disk_identity_a" "$excluded_disk_identity_b")
+              if [ "''${#progress_disk_lines[@]}" -gt 0 ]; then
+                printf '%s\n' "# Removable media detected. Continuing..."
+                printf '%s\n' "100"
+                break
+              fi
+
+              printf '%s\n' "# Insert the third USB flash drive for public root-inventory export.
+
+This drive will be reformatted before the public root certificate artifacts are written.
+
+Use a flash drive that is different from both custodian secret-share drives."
+              sleep "$poll_seconds"
+            done
+          ) | zenity --progress \
+            --pulsate \
+            --auto-close \
+            --no-cancel \
+            --width=960 \
+            --height=500 \
+            --title="Insert Flash Drive For Public Export" \
+            --text="Waiting for removable media..."
+          continue
+        fi
+
+        if [ "''${#disk_lines[@]}" -eq 1 ]; then
+          printf '%s' "''${disk_lines[0]}"
+          return 0
+        fi
+
+        rows=()
+        for line in "''${disk_lines[@]}"; do
+          IFS=$'\t' read -r disk_path disk_identity size description <<EOF
+$line
+EOF
+          [ -n "$description" ] || description="$disk_path"
+          rows+=("$disk_path" "$size" "$description")
+        done
+
+        choice="$(
+          zenity --list \
+            --width=1100 \
+            --height=520 \
+            --title="Choose Flash Drive For Public Export" \
+            --text="Multiple removable disks are available. Choose the flash drive to format for public root-inventory export." \
+            --column="Disk" \
+            --column="Size" \
+            --column="Details" \
+            "''${rows[@]}"
+        )" || return 1
+
+        for line in "''${disk_lines[@]}"; do
+          IFS=$'\t' read -r disk_path disk_identity size description <<EOF
+$line
+EOF
+          if [ "$disk_path" = "$choice" ]; then
+            printf '%s' "$line"
+            return 0
+          fi
+        done
+      done
+    }
+
     confirm_secret_export_disk_format() {
       local share_label="$1"
       local disk_path="$2"
@@ -504,6 +596,26 @@ Size: $size
 Details: $description
 
 Continue only if this is the correct flash drive for custodian $share_label."
+    }
+
+    confirm_public_inventory_disk_format() {
+      local disk_path="$1"
+      local size="$2"
+      local description="$3"
+
+      confirm_step \
+        "Confirm Drive Format For Public Export" \
+        "Format And Export" \
+        "Cancel" \
+        "The selected flash drive will be reformatted before the public root-inventory bundle is written.
+
+All existing data on this drive will be permanently destroyed.
+
+Disk: $disk_path
+Size: $size
+Details: $description
+
+Continue only if this is the correct third flash drive for exporting the public root certificate artifacts."
     }
 
     list_disk_mount_paths() {
@@ -640,49 +752,51 @@ Continue only if this is the correct flash drive for custodian $share_label."
       return "$status"
     }
 
-    format_and_mount_secret_export_disk() {
-      local share_label="$1"
-      local disk_path="$2"
-      local mount_path="$3"
-      local volume_label="$4"
+    format_and_mount_export_disk() {
+      local failure_title="$1"
+      local export_subject="$2"
+      local log_slug="$3"
+      local disk_path="$4"
+      local mount_path="$5"
+      local volume_label="$6"
       local partition_path=""
       local format_log=""
 
-      format_log="$(mktemp "/tmp/pd-pki-secret-share-format-$share_label.XXXXXX.log")"
+      format_log="$(mktemp "/tmp/pd-pki-$log_slug.XXXXXX.log")"
 
       unmount_disk_mount_paths "$disk_path" || {
-        show_error "Share Export Failed" "The selected flash drive could not be unmounted before formatting:
+        show_error "$failure_title" "The selected $export_subject could not be unmounted before formatting:
 $disk_path"
         rm -f "$format_log"
         return 1
       }
 
       if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n wipefs -af "$disk_path"; then
-        show_command_failure "Share Export Failed" "$format_log" "The selected flash drive could not be prepared for formatting:
+        show_command_failure "$failure_title" "$format_log" "The selected $export_subject could not be prepared for formatting:
 $disk_path"
         return 1
       fi
 
       if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n parted -s "$disk_path" mklabel gpt; then
-        show_command_failure "Share Export Failed" "$format_log" "The selected flash drive could not be repartitioned:
+        show_command_failure "$failure_title" "$format_log" "The selected $export_subject could not be repartitioned:
 $disk_path"
         return 1
       fi
 
       if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
-        show_command_failure "Share Export Failed" "$format_log" "The FAT32 partition could not be created on:
+        show_command_failure "$failure_title" "$format_log" "The FAT32 partition could not be created on:
 $disk_path"
         return 1
       fi
 
       partition_path="$(wait_for_partition_path "$disk_path" "$format_log")" || {
-        show_command_failure "Share Export Failed" "$format_log" "The new partition did not appear after formatting:
+        show_command_failure "$failure_title" "$format_log" "The new partition on the $export_subject did not appear after formatting:
 $disk_path"
         return 1
       }
 
       if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path"; then
-        show_command_failure "Share Export Failed" "$format_log" "The new FAT32 filesystem could not be created on:
+        show_command_failure "$failure_title" "$format_log" "The new FAT32 filesystem could not be created on:
 $partition_path"
         return 1
       fi
@@ -690,7 +804,7 @@ $partition_path"
       install -d -m 700 "$mount_path"
       if ! run_logged_retry_command "$format_log" "5" "$sudo_bin" -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
         rmdir "$mount_path" 2>/dev/null || true
-        show_command_failure "Share Export Failed" "$format_log" "The freshly formatted flash drive for custodian $share_label could not be mounted:
+        show_command_failure "$failure_title" "$format_log" "The freshly formatted $export_subject could not be mounted:
 $partition_path"
         return 1
       fi
@@ -771,7 +885,13 @@ $partition_path"
       exported_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
       volume_label="$(printf 'PDRT%s' "$share_label" | tr '[:lower:]' '[:upper:]')"
 
-      partition_path="$(format_and_mount_secret_export_disk "$share_label" "$disk_path" "$mount_path" "$volume_label")" || {
+      partition_path="$(format_and_mount_export_disk \
+        "Share Export Failed" \
+        "flash drive for custodian $share_label" \
+        "secret-share-format-$share_label" \
+        "$disk_path" \
+        "$mount_path" \
+        "$volume_label")" || {
         rm -rf "$bundle_stage_root"
         return 1
       }
@@ -935,9 +1055,145 @@ Please wait and do not remove the drive." \
         "$secret_dir" \
         "$subject" \
         "$validity_days" \
-        "$disk_path"
+        "$disk_path" || return 1
 
       printf '%s' "$disk_identity"
+    }
+
+    perform_public_root_inventory_export() {
+      local archive_dir="$1"
+      local bundle_name="$2"
+      local work_dir="$3"
+      local disk_path="$4"
+      local bundle_stage_root=""
+      local mount_path=""
+      local partition_path=""
+      local target_parent=""
+      local target_bundle=""
+      local export_log=""
+      local export_record_path=""
+      local exported_at=""
+      local volume_label="PDRTPUB"
+
+      bundle_stage_root="$(mktemp -d "/tmp/$bundle_name.XXXXXX")"
+      mount_path="$bundle_stage_root/mount"
+      target_parent="$mount_path/pd-pki-transfer/root-inventory"
+      target_bundle="$target_parent/$bundle_name"
+      export_log="$work_dir/root-inventory-export.log"
+      export_record_path="$work_dir/root-inventory-export.json"
+      exported_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+      partition_path="$(format_and_mount_export_disk \
+        "Public Inventory Export Failed" \
+        "flash drive for public root-inventory export" \
+        "public-root-inventory-format" \
+        "$disk_path" \
+        "$mount_path" \
+        "$volume_label")" || {
+        rm -rf "$bundle_stage_root"
+        return 1
+      }
+
+      mkdir -p "$target_parent"
+      if ! pd-pki-signing-tools export-root-inventory \
+        --source-dir "$archive_dir" \
+        --out-dir "$target_bundle" > "$export_log" 2>&1; then
+        show_command_failure \
+          "Public Inventory Export Failed" \
+          "$export_log" \
+          "The public root-inventory bundle could not be exported to the selected flash drive."
+        run_privileged umount "$mount_path" >/dev/null 2>&1 || true
+        rm -rf "$bundle_stage_root"
+        return 1
+      fi
+
+      jq -n \
+        --arg exportedAt "$exported_at" \
+        --arg mountPath "$mount_path" \
+        --arg devicePath "$partition_path" \
+        --arg diskPath "$disk_path" \
+        --arg bundlePath "$target_bundle" \
+        --arg filesystemLabel "$volume_label" \
+        --arg logPath "$export_log" \
+        '{
+          schemaVersion: 1,
+          profile: "root-yubikey-public-export-record",
+          exportedAt: $exportedAt,
+          mountPath: $mountPath,
+          devicePath: $devicePath,
+          diskPath: $diskPath,
+          bundlePath: $bundlePath,
+          filesystemLabel: $filesystemLabel,
+          logPath: $logPath
+        }' > "$export_record_path"
+
+      sync
+      if ! run_privileged umount "$mount_path"; then
+        show_error "Public Inventory Export Failed" "The public root-inventory bundle was written, but the mounted volume could not be unmounted safely:
+$mount_path"
+        rm -rf "$bundle_stage_root"
+        return 1
+      fi
+
+      rm -rf "$bundle_stage_root"
+
+      show_info \
+        "Public Inventory Exported" \
+        "The public root-inventory flash drive was reformatted and the exported artifact bundle was written successfully.
+
+Disk: $disk_path
+Filesystem label: $volume_label
+Bundle path: $target_bundle
+
+The volume has been unmounted. Remove the flash drive and move it to the development machine for normalization and commit."
+    }
+
+    export_public_root_inventory_bundle() {
+      local archive_dir="$1"
+      local session_timestamp="$2"
+      local work_dir="$3"
+      local excluded_disk_identity_a="$4"
+      local excluded_disk_identity_b="$5"
+      local selected_line=""
+      local disk_path=""
+      local disk_identity=""
+      local size=""
+      local description=""
+      local root_id=""
+      local bundle_name=""
+      local relative_bundle_path=""
+
+      root_id="$(root_id_from_certificate "$archive_dir/root-ca.cert.pem")" || {
+        show_error "Public Inventory Export Failed" "The archived root certificate could not be read from:
+$archive_dir/root-ca.cert.pem"
+        return 1
+      }
+      bundle_name="root-$root_id-$session_timestamp"
+      relative_bundle_path="pd-pki-transfer/root-inventory/$bundle_name"
+
+      selected_line="$(choose_usb_disk_for_public_inventory_export "$excluded_disk_identity_a" "$excluded_disk_identity_b")" || return 1
+      IFS=$'\t' read -r disk_path disk_identity size description <<EOF
+$selected_line
+EOF
+
+      if ! confirm_public_inventory_disk_format "$disk_path" "$size" "$description"; then
+        return 1
+      fi
+
+      run_step_with_progress \
+        "Preparing Public Root Inventory Flash Drive" \
+        "Formatting the selected flash drive and exporting the public root certificate artifacts.
+
+The wizard is erasing the selected drive, creating a fresh filesystem, writing the public root-inventory bundle, and unmounting the drive safely.
+
+Please wait and do not remove the drive." \
+        perform_public_root_inventory_export \
+        "$archive_dir" \
+        "$bundle_name" \
+        "$work_dir" \
+        "$disk_path" || return 1
+
+      printf '%s' "$relative_bundle_path"
     }
 
     remove_local_plaintext_secret_files() {
@@ -1086,6 +1342,7 @@ Continue only if this matches the expected ceremony."
       local summary_path="$1"
       local secret_dir="$2"
       local work_dir="$3"
+      local public_bundle_relative_path="$4"
       local yubikey_serial=""
       local certificate_install_path=""
       local archive_dir=""
@@ -1104,15 +1361,17 @@ YubiKey serial: $yubikey_serial
 Certificate fingerprint: $certificate_fingerprint
 Installed certificate: $certificate_install_path
 Archived public artifacts: $archive_dir
+Exported public bundle: $public_bundle_relative_path
 Ceremony work directory: $work_dir
 Secret export records: $secret_dir
 
 The plaintext PIN, PUK, and full management key files were removed from this workstation after provisioning. Custodian flash drives now hold the exported secret shares.
 
 Next steps:
-1. Export the public root inventory bundle from the archive directory.
-2. Normalize and commit the inventory on the development machine.
-3. Run verify-root-yubikey-identity before future root signing ceremonies."
+1. Move the public export flash drive to the development machine.
+2. Run normalize-root-inventory using the exported bundle path shown above.
+3. Commit the resulting inventory entry in the repository.
+4. Run verify-root-yubikey-identity before future root signing ceremonies."
     }
 
     main() {
@@ -1134,7 +1393,9 @@ Next steps:
       local dry_run_log=""
       local apply_log=""
       local share_a_disk_identity=""
+      local share_b_disk_identity=""
       local archive_dir=""
+      local public_bundle_relative_path=""
 
       require_command jq
       require_command lsblk
@@ -1182,7 +1443,7 @@ $profile_path"
 
 This ceremony is destructive:
 - the approved YubiKey will be reset and any existing PIV material on it will be permanently erased
-- each custodian flash drive selected in the next steps will be reformatted and all existing data on it will be permanently destroyed
+- each flash drive selected during this ceremony, including the third drive used for public root-inventory export, will be reformatted and all existing data on it will be permanently destroyed
 
 Continue only if the YubiKey is new in box or has been explicitly designated acceptable for this destroy-and-replace ceremony, and only if the three USB flash drives are available for use."; then
         exit 0
@@ -1213,7 +1474,7 @@ The next two steps will export:
 
 to two separate USB flash drives, one for each custodian.
 
-Each flash drive will be reformatted immediately before its share bundle is written.
+Each flash drive selected during this ceremony will be reformatted immediately before its bundle is written, including the third drive used later for public root-inventory export.
 
 Remove and seal each flash drive after export."
 
@@ -1233,7 +1494,8 @@ Remove and seal each flash drive after export."
 
       wait_for_usb_clear
 
-      export_secret_share_bundle \
+      share_b_disk_identity="$(
+        export_secret_share_bundle \
         "B" \
         "second-half" \
         "$management_key_share_b" \
@@ -1243,7 +1505,8 @@ Remove and seal each flash drive after export."
         "$secret_dir" \
         "$subject" \
         "$validity_days" \
-        "$share_a_disk_identity" >/dev/null || exit 1
+        "$share_a_disk_identity"
+      )" || exit 1
 
       wait_for_usb_clear
 
@@ -1321,7 +1584,22 @@ $secret_dir"
       fi
 
       remove_local_plaintext_secret_files "$secret_dir" "$pin_file" "$puk_file" "$management_key_file"
-      show_success_screen "$work_dir/root-yubikey-init-summary.json" "$secret_dir" "$work_dir"
+      wait_for_usb_clear
+
+      public_bundle_relative_path="$(
+        export_public_root_inventory_bundle \
+          "$archive_dir" \
+          "$session_timestamp" \
+          "$work_dir" \
+          "$share_a_disk_identity" \
+          "$share_b_disk_identity"
+      )" || exit 1
+
+      show_success_screen \
+        "$work_dir/root-yubikey-init-summary.json" \
+        "$secret_dir" \
+        "$work_dir" \
+        "$public_bundle_relative_path"
     }
 
     main "$@"

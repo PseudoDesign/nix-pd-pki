@@ -106,6 +106,7 @@ pkgs.writeShellApplication {
     list_unexpected_usb_devices() {
       local allow_yubikeys="$1"
       local device_path=""
+      local device_name=""
       local vendor_id=""
       local product_id=""
       local manufacturer=""
@@ -116,6 +117,12 @@ pkgs.writeShellApplication {
 
       for device_path in /sys/bus/usb/devices/*; do
         [ -f "$device_path/idVendor" ] || continue
+        device_name="$(basename "$device_path")"
+        case "$device_name" in
+          usb*)
+            continue
+            ;;
+        esac
         vendor_id="$(tr '[:upper:]' '[:lower:]' < "$device_path/idVendor")"
         product_id="$(tr '[:upper:]' '[:lower:]' < "$device_path/idProduct")"
         manufacturer="$(trim_whitespace "$(read_sysfs_value "$device_path/manufacturer")")"

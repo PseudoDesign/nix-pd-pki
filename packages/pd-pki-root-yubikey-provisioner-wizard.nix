@@ -983,12 +983,21 @@ $profile_path"
       wait_for_usb_clear
 
       if ! confirm_step \
-        "Confirm Destructive Operation" \
-        "This Key Is Approved" \
+        "Confirm Media And Destructive Operation" \
+        "Requirements Confirmed" \
         "Cancel" \
-        "This operation will format the inserted YubiKey and replace any existing PIV material.
+        "Before continuing, confirm that the ceremony team has:
 
-Continue only if this token is new in box or has been explicitly designated acceptable for this destroy-and-replace provisioning ceremony."; then
+1. Three USB flash drives
+   - two custodian drives for secret-share export
+   - one additional drive for public root-inventory export later in the ceremony
+2. One YubiKey that is approved for this root-provisioning operation
+
+This ceremony is destructive:
+- the approved YubiKey will be reset and any existing PIV material on it will be permanently erased
+- each custodian flash drive selected in the next steps will be reformatted and all existing data on it will be permanently destroyed
+
+Continue only if the YubiKey is new in box or has been explicitly designated acceptable for this destroy-and-replace ceremony, and only if the three USB flash drives are available for use."; then
         exit 0
       fi
 

@@ -45,6 +45,30 @@ def prompt_for_touch(prompt: str = "Touch your YubiKey...") -> None:
     print(prompt, file=sys.stderr)
 
 
+def sign_certificate_with_touch_retry(
+    session: PivSession,
+    slot: SLOT,
+    key_type: KEY_TYPE,
+    builder: x509.CertificateBuilder,
+    digest,
+    timeout: float,
+    max_attempts: int = 5,
+):
+    for attempt in range(1, max_attempts + 1):
+        prompt = "Touch your YubiKey..."
+        if attempt > 1:
+            prompt = f"Touch not detected. Touch your YubiKey... ({attempt}/{max_attempts})"
+
+        try:
+            with _timeout(lambda: prompt_for_touch(prompt), timeout):
+                return sign_certificate_builder(session, slot, key_type, builder, digest)
+        except ApduError as error:
+            if error.sw != SW.SECURITY_CONDITION_NOT_SATISFIED or attempt == max_attempts:
+                raise
+
+    raise RuntimeError("unreachable")
+
+
 def main() -> int:
     args = parse_args()
 
@@ -112,10 +136,9 @@ def main() -> int:
             except NotSupportedError:
                 timeout = 1.0
 
-            with _timeout(prompt_for_touch, timeout):
-                certificate = sign_certificate_builder(
-                    session, slot, key_type, builder, digest
-                )
+            certificate = sign_certificate_with_touch_retry(
+                session, slot, key_type, builder, digest, timeout
+            )
             session.put_certificate(slot, certificate)
             output_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
             return 0

@@ -73,6 +73,23 @@ pkgs.writeShellApplication {
       }
     }
 
+    require_available_root_certificate_install_path() {
+      local certificate_install_path="$1"
+
+      if [ -e "$certificate_install_path" ]; then
+        show_error \
+          "Existing Root Certificate Installed" \
+          "This appliance already has an installed runtime root certificate:
+
+$certificate_install_path
+
+Provisioning a new root on top of an existing runtime certificate is blocked.
+
+Use a fresh appliance image for a new ceremony, or if this is an intentional lab rerun, move the existing runtime root certificate and matching runtime metadata aside before restarting the wizard."
+        exit 1
+      fi
+    }
+
     run_privileged() {
       "$sudo_bin" -n "$@"
     }
@@ -1396,6 +1413,7 @@ Next steps:
       local share_b_disk_identity=""
       local archive_dir=""
       local public_bundle_relative_path=""
+      local certificate_install_path=""
 
       require_command jq
       require_command lsblk
@@ -1427,6 +1445,9 @@ $profile_path"
       install -d -m 700 "$sessions_root" "$secrets_root"
       subject="$(jq -r '.subject' "$profile_path")"
       validity_days="$(jq -r '.validityDays' "$profile_path")"
+      certificate_install_path="$(jq -r '.certificateInstallPath' "$profile_path")"
+
+      require_available_root_certificate_install_path "$certificate_install_path"
 
       wait_for_usb_clear
 

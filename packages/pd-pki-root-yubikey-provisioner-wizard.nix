@@ -66,6 +66,14 @@ pkgs.writeShellApplication {
         --text="$4"
     }
 
+    read_json_value() {
+      local query="$1"
+      local json_path="$2"
+
+      jq -r "$query" "$json_path" 2>/dev/null ||
+        "$sudo_bin" -n jq -r "$query" "$json_path"
+    }
+
     require_command() {
       command -v "$1" >/dev/null 2>&1 || {
         show_error "Missing Dependency" "Required command not found: $1"
@@ -73,21 +81,97 @@ pkgs.writeShellApplication {
       }
     }
 
-    require_available_root_certificate_install_path() {
-      local certificate_install_path="$1"
+    ceremony_timestamp_from_work_dir() {
+      local work_dir="$1"
+      local work_dir_name=""
 
-      if [ -e "$certificate_install_path" ]; then
-        show_error \
+      work_dir_name="$(basename "$work_dir")"
+      printf '%s' "''${work_dir_name##*-}"
+    }
+
+    find_resume_work_dir_for_installed_root_certificate() {
+      local certificate_install_path="$1"
+      local candidate=""
+
+      [ -f "$certificate_install_path" ] || return 1
+
+      while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        [ -f "$candidate/root-ca.cert.pem" ] || continue
+        [ -f "$candidate/root-yubikey-init-summary.json" ] || continue
+        if "$sudo_bin" -n cmp -s "$candidate/root-ca.cert.pem" "$certificate_install_path"; then
+          printf '%s' "$candidate"
+          return 0
+        fi
+      done < <(
+        find "$sessions_root" -maxdepth 1 -mindepth 1 -type d -name 'root-*' -printf '%T@ %p\n' 2>/dev/null |
+          sort -nr |
+          cut -d' ' -f2-
+      )
+
+      return 1
+    }
+
+    handle_existing_root_certificate_install_path() {
+      local certificate_install_path="$1"
+      local resume_work_dir=""
+      local summary_path=""
+      local yubikey_serial=""
+      local certificate_fingerprint=""
+      local public_bundle_relative_path=""
+
+      [ -e "$certificate_install_path" ] || return 0
+
+      resume_work_dir="$(find_resume_work_dir_for_installed_root_certificate "$certificate_install_path" || true)"
+      if [ -n "$resume_work_dir" ]; then
+        summary_path="$resume_work_dir/root-yubikey-init-summary.json"
+        yubikey_serial="$(read_json_value '.yubikeySerial // empty' "$summary_path" 2>/dev/null || true)"
+        certificate_fingerprint="$(read_json_value '.certificate.sha256Fingerprint // empty' "$summary_path" 2>/dev/null || true)"
+
+        if confirm_step \
           "Existing Root Certificate Installed" \
+          "Export Public Bundle" \
+          "Cancel" \
           "This appliance already has an installed runtime root certificate:
+
+$certificate_install_path
+
+Matching completed ceremony artifacts were found:
+$resume_work_dir
+
+YubiKey serial: $yubikey_serial
+Certificate fingerprint: $certificate_fingerprint
+
+Provisioning a new root on top of the existing runtime certificate is blocked.
+
+You can still finish this ceremony by exporting the public root-inventory bundle from the completed work directory to a third flash drive now."; then
+          wait_for_usb_clear
+          public_bundle_relative_path="$(
+            export_public_root_inventory_bundle \
+              "$resume_work_dir" \
+              "$(ceremony_timestamp_from_work_dir "$resume_work_dir")" \
+              "$resume_work_dir" \
+              "" \
+              ""
+          )" || exit 1
+          show_resumed_public_export_success_screen \
+            "$summary_path" \
+            "$resume_work_dir" \
+            "$public_bundle_relative_path"
+          exit 0
+        fi
+      fi
+
+      show_error \
+        "Existing Root Certificate Installed" \
+        "This appliance already has an installed runtime root certificate:
 
 $certificate_install_path
 
 Provisioning a new root on top of an existing runtime certificate is blocked.
 
 Use a fresh appliance image for a new ceremony, or if this is an intentional lab rerun, move the existing runtime root certificate and matching runtime metadata aside before restarting the wizard."
-        exit 1
-      fi
+      exit 1
     }
 
     run_privileged() {
@@ -398,7 +482,10 @@ The wizard will continue automatically when exactly one token is detected."
     root_id_from_certificate() {
       local certificate_path="$1"
 
-      openssl x509 -in "$certificate_path" -noout -fingerprint -sha256 |
+      {
+        openssl x509 -in "$certificate_path" -noout -fingerprint -sha256 2>/dev/null ||
+          "$sudo_bin" -n openssl x509 -in "$certificate_path" -noout -fingerprint -sha256
+      } |
         cut -d= -f2 |
         tr -d ':' |
         tr '[:upper:]' '[:lower:]'
@@ -1112,7 +1199,7 @@ Please wait and do not remove the drive." \
       }
 
       mkdir -p "$target_parent"
-      if ! pd-pki-signing-tools export-root-inventory \
+      if ! "$sudo_bin" -n pd-pki-signing-tools export-root-inventory \
         --source-dir "$source_dir" \
         --out-dir "$target_bundle" > "$export_log" 2>&1; then
         show_command_failure \
@@ -1365,10 +1452,10 @@ Continue only if this matches the expected ceremony."
       local archive_dir=""
       local certificate_fingerprint=""
 
-      yubikey_serial="$(jq -r '.yubikeySerial' "$summary_path")"
-      certificate_install_path="$(jq -r '.certificateInstallPath' "$summary_path")"
-      archive_dir="$(jq -r '.archiveDirectory' "$summary_path")"
-      certificate_fingerprint="$(jq -r '.certificate.sha256Fingerprint' "$summary_path")"
+      yubikey_serial="$(read_json_value '.yubikeySerial' "$summary_path")"
+      certificate_install_path="$(read_json_value '.certificateInstallPath' "$summary_path")"
+      archive_dir="$(read_json_value '.archiveDirectory' "$summary_path")"
+      certificate_fingerprint="$(read_json_value '.certificate.sha256Fingerprint' "$summary_path")"
 
       show_info \
         "Provisioning Complete" \
@@ -1383,6 +1470,32 @@ Ceremony work directory: $work_dir
 Secret export records: $secret_dir
 
 The plaintext PIN, PUK, and full management key files were removed from this workstation after provisioning. Custodian flash drives now hold the exported secret shares.
+
+Next steps:
+1. Move the public export flash drive to the development machine.
+2. Run normalize-root-inventory using the exported bundle path shown above.
+3. Commit the resulting inventory entry in the repository.
+4. Run verify-root-yubikey-identity before future root signing ceremonies."
+    }
+
+    show_resumed_public_export_success_screen() {
+      local summary_path="$1"
+      local work_dir="$2"
+      local public_bundle_relative_path="$3"
+      local yubikey_serial=""
+      local certificate_fingerprint=""
+
+      yubikey_serial="$(read_json_value '.yubikeySerial' "$summary_path")"
+      certificate_fingerprint="$(read_json_value '.certificate.sha256Fingerprint' "$summary_path")"
+
+      show_info \
+        "Public Export Complete" \
+        "The root YubiKey was already provisioned successfully during an earlier ceremony run, and the public root-inventory bundle has now been exported to the flash drive.
+
+YubiKey serial: $yubikey_serial
+Certificate fingerprint: $certificate_fingerprint
+Ceremony work directory: $work_dir
+Exported public bundle: $public_bundle_relative_path
 
 Next steps:
 1. Move the public export flash drive to the development machine.
@@ -1431,6 +1544,7 @@ Next steps:
       require_command ykman
       require_command zenity
       require_command openssl
+      require_command cmp
       [ -x "$sudo_bin" ] || {
         show_error "Missing Dependency" "Required sudo wrapper not found:
 $sudo_bin"
@@ -1447,7 +1561,7 @@ $profile_path"
       validity_days="$(jq -r '.validityDays' "$profile_path")"
       certificate_install_path="$(jq -r '.certificateInstallPath' "$profile_path")"
 
-      require_available_root_certificate_install_path "$certificate_install_path"
+      handle_existing_root_certificate_install_path "$certificate_install_path"
 
       wait_for_usb_clear
 

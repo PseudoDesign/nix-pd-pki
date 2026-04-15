@@ -2182,6 +2182,22 @@ EOF
         "$profile_path" \
         "$plan_path"
 
+      chmod 644 \
+        "$certificate_path" \
+        "$token_export_path" \
+        "$public_key_path" \
+        "$verified_public_key_path" \
+        "$attestation_path" \
+        "$metadata_path" \
+        "$summary_path" \
+        "$openssl_config_path" \
+        "$key_uri_path" \
+        "$profile_copy_path" \
+        "$device_info_before_path" \
+        "$piv_info_before_path" \
+        "$device_info_after_path" \
+        "$piv_info_after_path"
+
       install -d -m 700 "$archive_dir"
       install -m 644 "$certificate_path" "$archive_dir/root-ca.cert.pem"
       install -m 644 "$token_export_path" "$archive_dir/root-ca.token-export.cert.pem"

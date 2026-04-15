@@ -1078,7 +1078,7 @@ Please wait and do not remove the drive." \
     }
 
     perform_public_root_inventory_export() {
-      local archive_dir="$1"
+      local source_dir="$1"
       local bundle_name="$2"
       local work_dir="$3"
       local disk_path="$4"
@@ -1113,7 +1113,7 @@ Please wait and do not remove the drive." \
 
       mkdir -p "$target_parent"
       if ! pd-pki-signing-tools export-root-inventory \
-        --source-dir "$archive_dir" \
+        --source-dir "$source_dir" \
         --out-dir "$target_bundle" > "$export_log" 2>&1; then
         show_command_failure \
           "Public Inventory Export Failed" \
@@ -1166,7 +1166,7 @@ The volume has been unmounted. Remove the flash drive and move it to the develop
     }
 
     export_public_root_inventory_bundle() {
-      local archive_dir="$1"
+      local source_dir="$1"
       local session_timestamp="$2"
       local work_dir="$3"
       local excluded_disk_identity_a="$4"
@@ -1180,9 +1180,9 @@ The volume has been unmounted. Remove the flash drive and move it to the develop
       local bundle_name=""
       local relative_bundle_path=""
 
-      root_id="$(root_id_from_certificate "$archive_dir/root-ca.cert.pem")" || {
-        show_error "Public Inventory Export Failed" "The archived root certificate could not be read from:
-$archive_dir/root-ca.cert.pem"
+      root_id="$(root_id_from_certificate "$source_dir/root-ca.cert.pem")" || {
+        show_error "Public Inventory Export Failed" "The public root certificate could not be read from the ceremony work directory:
+$source_dir/root-ca.cert.pem"
         return 1
       }
       bundle_name="root-$root_id-$session_timestamp"
@@ -1205,7 +1205,7 @@ The wizard is erasing the selected drive, creating a fresh filesystem, writing t
 
 Please wait and do not remove the drive." \
         perform_public_root_inventory_export \
-        "$archive_dir" \
+        "$source_dir" \
         "$bundle_name" \
         "$work_dir" \
         "$disk_path" || return 1
@@ -1609,7 +1609,7 @@ $secret_dir"
 
       public_bundle_relative_path="$(
         export_public_root_inventory_bundle \
-          "$archive_dir" \
+          "$work_dir" \
           "$session_timestamp" \
           "$work_dir" \
           "$share_a_disk_identity" \

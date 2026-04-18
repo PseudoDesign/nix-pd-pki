@@ -1,4 +1,9 @@
-{ lib, nixos-raspberrypi, ... }:
+{
+  lib,
+  nixos-raspberrypi,
+  pkgs,
+  ...
+}:
 let
   disabledRadioKernelModules = [
     "bluetooth"
@@ -36,8 +41,8 @@ in
 
   services.avahi.enable = false;
   services.openssh = {
-    enable = lib.mkDefault false;
-    openFirewall = lib.mkDefault false;
+    enable = true;
+    openFirewall = true;
     settings = {
       PasswordAuthentication = false;
       KbdInteractiveAuthentication = false;
@@ -61,9 +66,20 @@ in
     };
   };
 
+  # Temporary development access for Raspberry Pi image bring-up.
+  users.users.adam = {
+    isNormalUser = true;
+    shell = pkgs.bashInteractive;
+    extraGroups = [ "wheel" ];
+    openssh.authorizedKeys.keys = [
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJMjtOqSWLDq79t/9XljmBrfBVm8deQJdOQmTV7c45Ni adam@malak"
+    ];
+  };
+
   system.nixos.tags = [
     "offline-root-ca"
     "raspberry-pi-5"
+    "temporary-dev-access"
   ];
   system.stateVersion = "25.11";
 }

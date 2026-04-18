@@ -22,6 +22,10 @@ let
         exit 2
       fi
 
+      ${lib.optionalString cfg.liveHardware.enable ''
+        pd-pki-live-root-identity-export
+      ''}
+
       exec ${lib.getExe' cfg.package "pd-pki-workflow"} root inventory verify \
         --repository-root ${lib.escapeShellArg (toString cfg.repositoryRoot)} \
         --root-name "$root_name" \
@@ -40,6 +44,10 @@ let
         printf '%s\n' "usage: pd-pki-root-sign-intermediate <root-name> [request-bundle-dir] [signed-bundle-dir]" >&2
         exit 2
       fi
+
+      ${lib.optionalString cfg.liveHardware.enable ''
+        pd-pki-live-root-identity-export
+      ''}
 
       exec ${lib.getExe' cfg.package "pd-pki-workflow"} request sign \
         --repository-root ${lib.escapeShellArg (toString cfg.repositoryRoot)} \
@@ -81,7 +89,7 @@ in
     Suggested ceremony flow:
       1. Copy committed root inventory into ${inventoryRootDir}
       2. Copy the intermediate signer policy into ${policyDir}
-      3. Stage token identity artifacts in ${toString cfg.tokenDir}
+      3. Run pd-pki-live-hardware-smoke and confirm the expected token is inserted
       4. Stage the incoming request bundle in ${requestBundleDir}
       5. Verify the inserted root token with: pd-pki-root-inventory-verify <root-name>
       6. Sign the request with: pd-pki-root-sign-intermediate <root-name>
@@ -90,6 +98,9 @@ in
     Runtime paths:
       request bundle: ${requestBundleDir}
       signed bundle: ${signedBundleDir}
+      token bridge: ${
+        if cfg.liveHardware.enable then "pd-pki-live-root-identity-export" else "disabled"
+      }
       local GUI: http://127.0.0.1:${toString cfg.port}/gui
   '';
 

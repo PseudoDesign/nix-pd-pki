@@ -7,4 +7,5 @@
 
   image.baseName = lib.mkForce "pd-pki-rpi5-root-intermediate-signer";
   networking.hostName = "rpi5-root-intermediate-signer";
+  services.pd-pki-workflow.liveHardware.enable = true;
 }

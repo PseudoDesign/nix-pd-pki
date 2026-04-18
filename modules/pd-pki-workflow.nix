@@ -54,6 +54,14 @@ in
       description = "Directory containing token exports or future adapters.";
     };
 
+    liveHardware.enable = lib.mkEnableOption "bridging a live YubiKey into tokenDir artifacts";
+
+    liveHardware.keySlot = lib.mkOption {
+      type = lib.types.str;
+      default = "9c";
+      description = "PIV slot expected to hold the root key when exporting live hardware state.";
+    };
+
     workspaceDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/pd-pki/workspace";

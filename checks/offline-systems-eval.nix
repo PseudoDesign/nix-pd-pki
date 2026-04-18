@@ -10,8 +10,12 @@ assert provisioner.services.usbguard.enable;
 assert signer.services.usbguard.enable;
 assert provisioner.services.pcscd.enable;
 assert signer.services.pcscd.enable;
+assert provisioner.services.pd-pki-workflow.liveHardware.enable;
+assert signer.services.pd-pki-workflow.liveHardware.enable;
 assert builtins.elem "root-yubikey-provisioner" provisioner.system.nixos.tags;
 assert builtins.elem "root-intermediate-signer" signer.system.nixos.tags;
+assert builtins.elem "live-hardware-bridge" provisioner.system.nixos.tags;
+assert builtins.elem "live-hardware-bridge" signer.system.nixos.tags;
 assert provisioner.networking.wireless.enable == false;
 assert signer.networking.wireless.enable == false;
 pkgs.runCommand "pd-pki-offline-systems-eval" { } ''

@@ -7,4 +7,5 @@
 
   image.baseName = lib.mkForce "pd-pki-rpi5-root-yubikey-provisioner";
   networking.hostName = "rpi5-root-yubikey-provisioner";
+  services.pd-pki-workflow.liveHardware.enable = true;
 }

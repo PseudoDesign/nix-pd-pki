@@ -34,7 +34,10 @@
         pkgs:
         pd-pki-python.packages.${pkgs.stdenv.hostPlatform.system}.pd-pki.overrideAttrs
           (old: {
-            patches = (old.patches or [ ]) ++ [ ./patches/pd-pki-python-kiosk-ui-tweaks.patch ];
+            patches = (old.patches or [ ]) ++ [
+              ./patches/pd-pki-python-locked-config-dom-bypass.patch
+              ./patches/pd-pki-python-kiosk-ui-tweaks.patch
+            ];
             nativeInstallCheckInputs = (old.nativeInstallCheckInputs or [ ]) ++ [ pkgs.python312Packages.behave ];
             postPatch = (old.postPatch or "") + ''
               substituteInPlace src/pd_pki_workflow/api.py \

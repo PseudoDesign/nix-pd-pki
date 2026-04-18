@@ -8,6 +8,9 @@
 {
   default = pd-pki-package;
   package = pd-pki-package;
+  package-gui-lock-config = import ./package-gui-lock-config.nix {
+    inherit pkgs pd-pki-package;
+  };
   module-eval = import ./module-eval.nix {
     inherit pkgs nixpkgs pd-pki-python pd-pki-package;
   };

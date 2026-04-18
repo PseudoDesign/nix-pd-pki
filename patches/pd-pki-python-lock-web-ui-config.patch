@@ -69,7 +69,7 @@
 +            <section class="config-managed-note">
 +              <h2>Workflow Configuration</h2>
 +              <p>
-+                This appliance manages the workflow directories and root identity
++                This deployment manages the workflow directories and root identity
 +                internally. Operators can move straight through the ceremony
 +                steps without typing local path configuration into the browser.
                </p>
@@ -159,7 +159,7 @@
        ];
        const searchParams = new URLSearchParams(window.location.search);
 +      const lockedWorkflowConfig = __LOCKED_WORKFLOW_CONFIG__;
-+      const configLocked = lockedWorkflowConfig != null;
++      const configLocked = lockedWorkflowConfig !== null;
        const apiBaseUrl = searchParams.get("apiBaseUrl") || window.location.origin;
        const statusBanner = document.getElementById("status-banner");
        const statusBannerText = document.getElementById("status-banner-text");
@@ -214,7 +214,7 @@
 +
 +
 +def _locked_workflow_gui_config() -> dict[str, str] | None:
-+    """Resolve optional, appliance-managed GUI settings from environment."""
++    """Resolve optional, deployment-managed GUI settings from environment."""
 +
 +    lock_setting = os.getenv("PD_PKI_WEB_LOCK_CONFIG", "").strip().lower()
 +    if lock_setting in {"0", "false", "no", "off"}:

@@ -35,7 +35,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
           "curl --fail --silent http://127.0.0.1:8000/gui | grep -F 'data-config-mode=\"locked\"'"
       )
       machine.wait_until_succeeds(
-          "curl --fail --silent http://127.0.0.1:8000/gui | grep -F 'This appliance manages the workflow directories and root identity internally.'"
+          "curl --fail --silent http://127.0.0.1:8000/gui | grep -F 'This deployment manages the workflow directories and root identity internally.'"
       )
 
       machine.succeed("test -d /var/lib/pd-pki/profile")

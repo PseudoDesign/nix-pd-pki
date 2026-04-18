@@ -19,6 +19,7 @@ let
   cfg = evaluated.config.services.pd-pki-workflow;
   service = evaluated.config.systemd.services.pd-pki-api;
   user = evaluated.config.users.users.${cfg.user};
+  serviceEnvironment = service.environment;
 
   readWritePaths = map toString service.serviceConfig.ReadWritePaths;
   expectedReadWritePaths = map toString [
@@ -37,6 +38,7 @@ let
     port = cfg.port;
     workingDirectory = toString service.serviceConfig.WorkingDirectory;
     execStart = service.serviceConfig.ExecStart;
+    webRootName = serviceEnvironment.PD_PKI_WEB_ROOT_NAME;
     readWritePaths = readWritePaths;
   };
 in
@@ -46,6 +48,14 @@ assert toString user.home == toString cfg.stateDir;
 assert service.wantedBy == [ "multi-user.target" ];
 assert service.serviceConfig.User == cfg.user;
 assert service.serviceConfig.Group == cfg.group;
+assert serviceEnvironment.PD_PKI_WEB_LOCK_CONFIG == "1";
+assert serviceEnvironment.PD_PKI_WEB_WORKFLOW_ROOT == toString cfg.stateDir;
+assert serviceEnvironment.PD_PKI_WEB_PROFILE_DIR == toString cfg.profileDir;
+assert serviceEnvironment.PD_PKI_WEB_TOKEN_DIR == toString cfg.tokenDir;
+assert serviceEnvironment.PD_PKI_WEB_WORKSPACE_DIR == toString cfg.workspaceDir;
+assert serviceEnvironment.PD_PKI_WEB_BUNDLE_DIR == toString cfg.bundleDir;
+assert serviceEnvironment.PD_PKI_WEB_REPOSITORY_ROOT == toString cfg.repositoryRoot;
+assert serviceEnvironment.PD_PKI_WEB_ROOT_NAME == cfg.web.rootName;
 assert builtins.all (path: builtins.elem path readWritePaths) expectedReadWritePaths;
 pkgs.runCommand "pd-pki-module-eval" { } ''
   cat > "$out" <<'EOF'

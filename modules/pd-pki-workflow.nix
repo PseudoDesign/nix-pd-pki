@@ -13,6 +13,16 @@ let
       pd-pki-package
     else
       pd-pki-python.packages.${pkgs.stdenv.hostPlatform.system}.pd-pki;
+  webEnvironment = lib.optionalAttrs cfg.web.lockConfig {
+    PD_PKI_WEB_LOCK_CONFIG = "1";
+    PD_PKI_WEB_WORKFLOW_ROOT = toString cfg.stateDir;
+    PD_PKI_WEB_PROFILE_DIR = toString cfg.profileDir;
+    PD_PKI_WEB_TOKEN_DIR = toString cfg.tokenDir;
+    PD_PKI_WEB_WORKSPACE_DIR = toString cfg.workspaceDir;
+    PD_PKI_WEB_BUNDLE_DIR = toString cfg.bundleDir;
+    PD_PKI_WEB_REPOSITORY_ROOT = toString cfg.repositoryRoot;
+    PD_PKI_WEB_ROOT_NAME = cfg.web.rootName;
+  };
 in
 {
   options.services.pd-pki-workflow = {
@@ -80,6 +90,18 @@ in
       description = "Directory holding normalized inventory and policy data.";
     };
 
+    web.lockConfig = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to hide GUI path inputs and serve NixOS-managed workflow settings to the built-in web console.";
+    };
+
+    web.rootName = lib.mkOption {
+      type = lib.types.str;
+      default = "pd-root-2026";
+      description = "Root name injected into the built-in web console when GUI inputs are locked.";
+    };
+
     listenAddress = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1";
@@ -129,7 +151,7 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
-      environment = cfg.environment;
+      environment = webEnvironment // cfg.environment;
 
       serviceConfig = {
         User = cfg.user;

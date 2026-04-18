@@ -34,6 +34,7 @@
         pkgs:
         pd-pki-python.packages.${pkgs.stdenv.hostPlatform.system}.pd-pki.overrideAttrs
           (old: {
+            patches = (old.patches or [ ]) ++ [ ./patches/pd-pki-python-lock-web-ui-config.patch ];
             postPatch = (old.postPatch or "") + ''
               substituteInPlace src/pd_pki_workflow/api.py \
                 --replace-fail "HTTP_422_UNPROCESSABLE_CONTENT" "HTTP_422_UNPROCESSABLE_ENTITY"

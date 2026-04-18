@@ -34,8 +34,10 @@ The imported application package and console entrypoints are also passed
 through as flake outputs:
 
 - `packages.<system>.pd-pki`
+- `packages.<linux-system>.install-rpi5-root-yubikey-provisioner-sdcard`
 - `packages.aarch64-linux.rpi5-root-yubikey-provisioner-sd-image`
 - `packages.aarch64-linux.rpi5-root-intermediate-signer-sd-image`
+- `apps.<linux-system>.install-rpi5-root-yubikey-provisioner-sdcard`
 - `apps.<system>.pd-pki-api`
 - `apps.<system>.pd-pki-workflow`
 - `apps.<system>.pd-pki-mock-api`
@@ -59,6 +61,20 @@ Build the Raspberry Pi 5 offline images:
 ```bash
 nix build .#packages.aarch64-linux.rpi5-root-yubikey-provisioner-sd-image
 nix build .#packages.aarch64-linux.rpi5-root-intermediate-signer-sd-image
+```
+
+Build and write the provisioner SD image to a whole-disk SD card device on
+Linux:
+
+```bash
+nix run .#install-rpi5-root-yubikey-provisioner-sdcard -- --yes /dev/sdX
+```
+
+You can also reuse an existing `.img` or `.img.zst` instead of building:
+
+```bash
+nix run .#install-rpi5-root-yubikey-provisioner-sdcard -- \
+  --image ./result --yes /dev/sdX
 ```
 
 Build the VM smoke test directly:

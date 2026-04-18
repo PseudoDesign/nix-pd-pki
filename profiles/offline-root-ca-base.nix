@@ -15,7 +15,6 @@ let
     set -euo pipefail
 
     slot=${lib.escapeShellArg liveHardwareSlot}
-    token_dir=${lib.escapeShellArg (toString cfg.tokenDir)}
 
     fail() {
       printf '%s\n' "$1" >&2
@@ -95,6 +94,7 @@ let
     text = ''
       ${liveHardwareShell}
 
+      token_dir=${lib.escapeShellArg (toString cfg.tokenDir)}
       serial="$(detect_single_serial)"
       tmp_dir="$(mktemp -d)"
       trap 'rm -rf "$tmp_dir"' EXIT
@@ -168,6 +168,7 @@ let
     text = ''
       ${liveHardwareShell}
 
+      token_dir=${lib.escapeShellArg (toString cfg.tokenDir)}
       serial="$(detect_single_serial)"
       tmp_dir="$(mktemp -d)"
       trap 'rm -rf "$tmp_dir"' EXIT

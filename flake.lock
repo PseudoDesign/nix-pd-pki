@@ -104,11 +104,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1776481070,
-        "narHash": "sha256-kwnVJO8ItCEtHiLjAZ1FcbtNd2bEe1l3TCV0xgVk8vU=",
+        "lastModified": 1776545478,
+        "narHash": "sha256-EcnMgwFYQUbq6tIVrGBgLYfhh3VM0wUBMtOLPC7+f3Q=",
         "owner": "PseudoDesign",
         "repo": "pd-pki-python",
-        "rev": "0e5a4c08b1649c52e124bbfdf4c6032ef1603f4b",
+        "rev": "56a4eaa522ca4ee50a477a24385aa98f916b91b8",
         "type": "github"
       },
       "original": {

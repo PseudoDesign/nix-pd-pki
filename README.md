@@ -156,6 +156,9 @@ Provisioner behavior on live hardware:
 - `pd-pki-root-provision apply` is intentionally guarded and refuses to pretend
   it can destructively initialize live hardware unless
   `PD_PKI_ALLOW_FIXTURE_APPLY=1` is set for the existing rehearsal path
+- the Raspberry Pi 5 provisioner image boots the local `/gui` into a Chromium
+  kiosk on `tty1`; additional virtual consoles stay at a normal login prompt
+  instead of autologging in
 
 The signer profile standardizes:
 

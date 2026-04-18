@@ -159,6 +159,10 @@ Provisioner behavior on live hardware:
 - the Raspberry Pi 5 provisioner image boots the local `/gui` into a Chromium
   kiosk on `tty1`; additional virtual consoles stay at a normal login prompt
   instead of autologging in
+- HDMI touch displays that expose touch over USB are intended to work on the
+  provisioner image; connect Pi micro-HDMI to the display HDMI input, connect a
+  Pi USB-A port to the display's `Type-C1` touch port, and power the display
+  from its `Type-C2` 5V input
 
 The signer profile standardizes:
 

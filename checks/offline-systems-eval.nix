@@ -3,8 +3,11 @@
   offlineSystems,
 }:
 let
+  lib = pkgs.lib;
   provisioner = offlineSystems.rpi5RootYubiKeyProvisioner.config;
   signer = offlineSystems.rpi5RootIntermediateSigner.config;
+  provisionerUsbGuardRules = lib.splitString "\n" provisioner.services.usbguard.rules;
+  signerUsbGuardRules = lib.splitString "\n" signer.services.usbguard.rules;
 in
 assert provisioner.services.usbguard.enable;
 assert signer.services.usbguard.enable;
@@ -22,6 +25,8 @@ assert !provisioner.security.sudo.wheelNeedsPassword;
 assert !signer.security.sudo.wheelNeedsPassword;
 assert provisioner.services.cage.enable;
 assert !signer.services.cage.enable;
+assert builtins.elem "allow with-interface one-of { 03:00:00 }" provisionerUsbGuardRules;
+assert !(builtins.elem "allow with-interface one-of { 03:00:00 }" signerUsbGuardRules);
 assert provisioner.users.users.adam.isNormalUser;
 assert signer.users.users.adam.isNormalUser;
 assert builtins.elem "wheel" provisioner.users.users.adam.extraGroups;

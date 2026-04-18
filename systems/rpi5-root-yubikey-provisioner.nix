@@ -48,6 +48,10 @@ in
   networking.hostName = "rpi5-root-yubikey-provisioner";
   services.getty.autologinUser = lib.mkForce null;
   services.pd-pki-workflow.liveHardware.enable = true;
+  services.usbguard.rules = lib.mkAfter ''
+    # Allow USB HID touch interfaces for the local kiosk display.
+    allow with-interface one-of { 03:00:00 }
+  '';
 
   fonts.packages = [ pkgs.dejavu_fonts ];
 

@@ -72,6 +72,20 @@ in
       description = "PIV slot expected to hold the root key when exporting live hardware state.";
     };
 
+    liveHardware.managedProvisioningInputs.enable = lib.mkEnableOption "synchronizing token state and a managed provisioning profile from live hardware for the root provisioner workflow";
+
+    liveHardware.managedProvisioningInputs.contractVersion = lib.mkOption {
+      type = lib.types.str;
+      default = "1.0";
+      description = "Contract version written into the managed root provisioning profile.";
+    };
+
+    liveHardware.managedProvisioningInputs.syncInterval = lib.mkOption {
+      type = lib.types.str;
+      default = "5s";
+      description = "How often to refresh the managed live root provisioning inputs while the appliance is running.";
+    };
+
     workspaceDir = lib.mkOption {
       type = lib.types.path;
       default = "/var/lib/pd-pki/workspace";

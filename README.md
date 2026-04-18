@@ -153,6 +153,9 @@ Provisioner behavior on live hardware:
 
 - `pd-pki-root-provision dry-run` refreshes `tokenDir` from the attached
   YubiKey before calling the upstream workflow
+- the live provisioner profile also manages `profile.json` under the hood on
+  Raspberry Pi kiosk systems by deriving the expected serial from the inserted
+  YubiKey and refreshing both `token/` and `profile/` automatically
 - `pd-pki-root-provision apply` is intentionally guarded and refuses to pretend
   it can destructively initialize live hardware unless
   `PD_PKI_ALLOW_FIXTURE_APPLY=1` is set for the existing rehearsal path

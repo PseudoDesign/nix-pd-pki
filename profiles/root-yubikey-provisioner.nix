@@ -26,7 +26,10 @@ let
       case "$subcommand" in
         dry-run)
           ${lib.optionalString cfg.liveHardware.enable ''
-            pd-pki-live-token-state-export
+            ${if cfg.liveHardware.managedProvisioningInputs.enable then
+              "pd-pki-live-provisioner-input-sync"
+            else
+              "pd-pki-live-token-state-export"}
           ''}
           exec ${lib.getExe' cfg.package "pd-pki-workflow"} root provision dry-run \
             --profile-dir ${lib.escapeShellArg (toString cfg.profileDir)} \
@@ -36,7 +39,10 @@ let
           ;;
         apply)
           ${lib.optionalString cfg.liveHardware.enable ''
-            pd-pki-live-token-state-export
+            ${if cfg.liveHardware.managedProvisioningInputs.enable then
+              "pd-pki-live-provisioner-input-sync"
+            else
+              "pd-pki-live-token-state-export"}
             if [ "''${PD_PKI_ALLOW_FIXTURE_APPLY:-}" != "1" ]; then
               printf '%s\n' "live hardware mode does not yet implement destructive on-token provisioning" >&2
               printf '%s\n' "set PD_PKI_ALLOW_FIXTURE_APPLY=1 to run the current file-backed rehearsal against the captured live token state" >&2
@@ -69,6 +75,8 @@ let
 in
 {
   imports = [ ./offline-root-ca-base.nix ];
+  services.pd-pki-workflow.liveHardware.managedProvisioningInputs.enable =
+    lib.mkDefault cfg.liveHardware.enable;
   systemd.tmpfiles.rules = [
     "d ${planDir} 0700 ${cfg.user} ${cfg.group} - -"
     "d ${archiveDir} 0700 ${cfg.user} ${cfg.group} - -"
@@ -92,7 +100,7 @@ in
     Pseudo Design offline root YubiKey provisioner
 
     Suggested ceremony flow:
-      1. Stage profile.json in ${toString cfg.profileDir}
+      1. ${if cfg.liveHardware.managedProvisioningInputs.enable then "Insert the root YubiKey; the provisioner syncs token state and profile.json automatically" else "Stage profile.json in ${toString cfg.profileDir}"}
       2. Run pd-pki-live-hardware-smoke and confirm the detected serial and slot
       3. Review the provisioning plan with: pd-pki-root-provision dry-run
       4. Use pd-pki-root-provision apply only for the current file-backed rehearsal
@@ -103,7 +111,7 @@ in
       plan: ${planDir}
       archive: ${archiveDir}
       root inventory bundle: ${rootInventoryBundleDir}
-      token bridge: ${if cfg.liveHardware.enable then "pd-pki-live-token-state-export" else "disabled"}
+      live input sync: ${if cfg.liveHardware.managedProvisioningInputs.enable then "pd-pki-live-provisioner-input-sync" else "disabled"}
       local GUI: http://127.0.0.1:${toString cfg.port}/gui
   '';
 

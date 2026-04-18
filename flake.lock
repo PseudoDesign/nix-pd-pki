@@ -1,0 +1,48 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1764521362,
+        "narHash": "sha256-M101xMtWdF1eSD0xhiR8nG8CXRlHmv6V+VoY65Smwf4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "871b9fd269ff6246794583ce4ee1031e1da71895",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "25.11",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "pd-pki-python": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1776481070,
+        "narHash": "sha256-kwnVJO8ItCEtHiLjAZ1FcbtNd2bEe1l3TCV0xgVk8vU=",
+        "owner": "PseudoDesign",
+        "repo": "pd-pki-python",
+        "rev": "0e5a4c08b1649c52e124bbfdf4c6032ef1603f4b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "PseudoDesign",
+        "repo": "pd-pki-python",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "pd-pki-python": "pd-pki-python"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

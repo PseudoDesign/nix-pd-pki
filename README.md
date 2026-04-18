@@ -157,8 +157,9 @@ Provisioner behavior on live hardware:
   it can destructively initialize live hardware unless
   `PD_PKI_ALLOW_FIXTURE_APPLY=1` is set for the existing rehearsal path
 - the Raspberry Pi 5 provisioner image boots the local `/gui` into a Chromium
-  kiosk on `tty1`; additional virtual consoles stay at a normal login prompt
-  instead of autologging in
+  kiosk on `tty1`, forces a dark presentation, and hides the browser cursor for
+  touchscreen operation; additional virtual consoles stay at a normal login
+  prompt instead of autologging in
 - HDMI touch displays that expose touch over USB are intended to work on the
   provisioner image; connect Pi micro-HDMI to the display HDMI input, connect a
   Pi USB-A port to the display's `Type-C1` touch port, and power the display

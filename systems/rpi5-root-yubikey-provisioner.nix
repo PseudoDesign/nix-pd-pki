@@ -28,6 +28,7 @@ let
       exec ${lib.getExe pkgs.chromium} \
         --enable-features=UseOzonePlatform \
         --ozone-platform=wayland \
+        --force-dark-mode \
         --kiosk \
         --incognito \
         --no-first-run \
@@ -48,6 +49,10 @@ in
   networking.hostName = "rpi5-root-yubikey-provisioner";
   services.getty.autologinUser = lib.mkForce null;
   services.pd-pki-workflow.liveHardware.enable = true;
+  services.pd-pki-workflow.environment = {
+    PD_PKI_WEB_HIDE_CURSOR = "1";
+    PD_PKI_WEB_THEME = "dark";
+  };
   services.usbguard.rules = lib.mkAfter ''
     # Allow USB HID touch interfaces for the local kiosk display.
     allow with-interface one-of { 03:00:00 }

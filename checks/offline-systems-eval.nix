@@ -6,6 +6,7 @@ let
   lib = pkgs.lib;
   provisioner = offlineSystems.rpi5RootYubiKeyProvisioner.config;
   signer = offlineSystems.rpi5RootIntermediateSigner.config;
+  provisionerApiEnvironment = provisioner.systemd.services.pd-pki-api.environment;
   provisionerUsbGuardRules = lib.splitString "\n" provisioner.services.usbguard.rules;
   signerUsbGuardRules = lib.splitString "\n" signer.services.usbguard.rules;
 in
@@ -25,6 +26,8 @@ assert !provisioner.security.sudo.wheelNeedsPassword;
 assert !signer.security.sudo.wheelNeedsPassword;
 assert provisioner.services.cage.enable;
 assert !signer.services.cage.enable;
+assert provisionerApiEnvironment.PD_PKI_WEB_HIDE_CURSOR == "1";
+assert provisionerApiEnvironment.PD_PKI_WEB_THEME == "dark";
 assert builtins.elem "allow with-interface one-of { 03:00:00 }" provisionerUsbGuardRules;
 assert !(builtins.elem "allow with-interface one-of { 03:00:00 }" signerUsbGuardRules);
 assert provisioner.users.users.adam.isNormalUser;

@@ -226,6 +226,18 @@ Operational defaults for the provisioner appliance:
 - auto-launches the graphical provisioning wizard for YubiKey setup and media
   export
 
+Operational defaults for the intermediate signer appliance:
+
+- boots into the same offline root CA workstation profile
+- runs the same touch-friendly kiosk session with a hidden cursor and 15-minute
+  inactivity screen blanking
+- auto-launches a graphical intermediate-signing wizard
+- copies the request bundle from removable media into a local ceremony work
+  directory
+- walks the operator through CSR review and committed root-inventory selection
+- verifies the inserted root CA YubiKey before signing
+- reformats a fresh export drive for the signed bundle handoff
+
 If you build from a non-`aarch64-linux` host, you will usually need either
 binfmt emulation or an `aarch64-linux` builder available to Nix.
 

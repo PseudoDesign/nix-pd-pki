@@ -39,6 +39,10 @@ let
     inherit pkgs pdPkiSigningTools;
   };
 
+  pdPkiRootIntermediateSignerWizard = import ./pd-pki-root-intermediate-signer-wizard.nix {
+    inherit pkgs pdPkiSigningTools;
+  };
+
   rolePackages = {
     pd-pki = pkgs.linkFarm "pd-pki" [
       {
@@ -67,6 +71,7 @@ let
     pd-pki-operator = pdPkiOperator;
     pd-pki-normalize-root-inventory-from-mount = pdPkiNormalizeRootInventoryFromMount;
     pd-pki-root-yubikey-provisioner-wizard = pdPkiRootYubiKeyProvisionerWizard;
+    pd-pki-root-intermediate-signer-wizard = pdPkiRootIntermediateSignerWizard;
   };
 
   stepPackages =

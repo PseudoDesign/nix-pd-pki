@@ -2375,6 +2375,8 @@ $partition_path"
       local issuer_key_uri=""
       local sign_confirmation=""
       local signed_bundle_name=""
+      local entered_pin=""
+      local temporary_pin_file=""
       local export_disk_line=""
       local export_disk_path=""
       local export_disk_size=""
@@ -2383,7 +2385,7 @@ $partition_path"
       local export_destination_dir=""
 
       if ui_is_dialog; then
-        dialog_info "Root Intermediate Signer" "This ceremony will:\n\n1. Copy one intermediate request bundle from removable media onto the signer.\n2. Require operator review of the CSR details.\n3. Verify the inserted root CA YubiKey against committed root inventory.\n4. Sign the CSR.\n5. Format a fresh removable drive for the signed output bundle.\n\nBefore continuing, confirm the committed root inventory and matching root policy tree are present on this workstation and the root PIN file is available locally."
+        dialog_info "Root Intermediate Signer" "This ceremony will:\n\n1. Copy one intermediate request bundle from removable media onto the signer.\n2. Require operator review of the CSR details.\n3. Verify the inserted root CA YubiKey against committed root inventory.\n4. Sign the CSR.\n5. Format a fresh removable drive for the signed output bundle.\n\nBefore continuing, confirm the committed root inventory and matching root policy tree are present on this workstation. A pre-staged root PIN file is optional; the operator can enter the PIN interactively if needed."
       else
         print_header
         printf '%s\n' "This ceremony will:"
@@ -2393,7 +2395,8 @@ $partition_path"
         printf '%s\n' "  4. Sign the CSR."
         printf '%s\n' "  5. Format a fresh removable drive for the signed output bundle."
         printf '%s\n' ""
-        printf '%s\n' "Confirm the committed root inventory and matching root policy tree are present on this workstation and the root PIN file is available locally."
+        printf '%s\n' "Confirm the committed root inventory and matching root policy tree are present on this workstation."
+        printf '%s\n' "A pre-staged root PIN file is optional; the operator can enter the PIN interactively if needed."
       fi
 
       if ! prompt_yes_no "Proceed with the root intermediate signing ceremony?" "y"; then
@@ -2445,7 +2448,6 @@ $partition_path"
 
       issuer_cert="$(default_or_prompt_existing_file "Root certificate path" "''${ROOT_CERT_FILE:-$(issuer_default_cert_path root)}")" || return 0
       signer_state_dir="$(default_or_prompt_existing_dir "Root signer state directory" "''${ROOT_SIGNER_STATE_DIR:-$(issuer_default_signer_state_dir root)}")" || return 0
-      pin_file="$(default_or_prompt_existing_file "Root YubiKey PIN file" "''${PIN_FILE:-}")" || return 0
       root_inventory_root="''${ROOT_INVENTORY_ROOT:-/var/lib/pd-pki/inventory/root-ca}"
       root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
       root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
@@ -2461,6 +2463,20 @@ Expected committed policy at one of:
 Optional fallback path:
 ''${ROOT_POLICY_FILE:-<not configured>}"
         return 1
+      fi
+      if [ -n "''${PIN_FILE:-}" ] && [ -f "''${PIN_FILE:-}" ]; then
+        pin_file="''${PIN_FILE:-}"
+      else
+        while true; do
+          entered_pin="$(prompt_secret "Root YubiKey PIN")" || return 0
+          if [ -n "$entered_pin" ]; then
+            temporary_pin_file="$workflow_dir/root-pin-$(current_timestamp_utc).txt"
+            write_secret_file "$temporary_pin_file" "$entered_pin"
+            pin_file="$temporary_pin_file"
+            break
+          fi
+          show_error "Missing PIN" "A YubiKey PIN is required to verify the root token and sign the intermediate CSR."
+        done
       fi
 
       wait_for_yubikey_insertion || return 0

@@ -33,6 +33,9 @@ pkgs.writeShellApplication {
     readonly root_signer_state_dir="''${ROOT_SIGNER_STATE_DIR:-$session_home/signer-state/root}"
     readonly pkcs11_module_path="${pkgs.yubico-piv-tool}/lib/libykcs11.so"
     readonly sudo_bin="/run/wrappers/bin/sudo"
+    temporary_pin_file=""
+
+    trap 'rm -f "''${temporary_pin_file:-}"' EXIT
 
     trim_whitespace() {
       local value="$1"
@@ -82,6 +85,27 @@ pkgs.writeShellApplication {
         --title="$title" \
         --text="$text" \
         --entry-text="$default_value"
+    }
+
+    prompt_secret() {
+      local title="$1"
+      local text="$2"
+
+      zenity --entry \
+        --hide-text \
+        --width=720 \
+        --height=220 \
+        --title="$title" \
+        --text="$text"
+    }
+
+    write_secret_file() {
+      local target_path="$1"
+      local secret="$2"
+      (
+        umask 077
+        printf '%s\n' "$secret" > "$target_path"
+      )
     }
 
     require_command() {
@@ -655,6 +679,38 @@ EOF
       fi
 
       return 1
+    }
+
+    resolve_root_pin_file() {
+      local existing_pin_file="$1"
+      local entered_pin=""
+
+      if [ -f "$existing_pin_file" ]; then
+        printf '%s' "$existing_pin_file"
+        return 0
+      fi
+
+      if [ -n "$temporary_pin_file" ] && [ -f "$temporary_pin_file" ]; then
+        printf '%s' "$temporary_pin_file"
+        return 0
+      fi
+
+      while true; do
+        entered_pin="$(prompt_secret \
+          "Enter Root YubiKey PIN" \
+          "No pre-staged PIN file was found for this appliance.
+
+Enter the root YubiKey PIN now using the touch display. The PIN will be written only to a temporary local file for this ceremony and deleted automatically when the wizard exits.")" || return 1
+
+        if [ -n "$entered_pin" ]; then
+          temporary_pin_file="$(mktemp "/tmp/pd-pki-root-pin.XXXXXX")"
+          write_secret_file "$temporary_pin_file" "$entered_pin"
+          printf '%s' "$temporary_pin_file"
+          return 0
+        fi
+
+        show_error "Missing PIN" "A YubiKey PIN is required to verify the root token and sign the intermediate CSR."
+      done
     }
 
     find_root_inventory_dirs() {
@@ -1394,6 +1450,7 @@ Next steps:
       local root_inventory_dir=""
       local root_inventory_summary=""
       local policy_file_path=""
+      local active_pin_file=""
       local yubikey_serial=""
       local verify_log=""
       local sign_log=""
@@ -1425,11 +1482,6 @@ Next steps:
       [ -x "$sudo_bin" ] || {
         show_error "Missing Dependency" "Required sudo wrapper not found:
 $sudo_bin"
-        exit 1
-      }
-      [ -f "$pin_file_path" ] || {
-        show_error "Missing PIN File" "Root YubiKey PIN file not found:
-$pin_file_path"
         exit 1
       }
       [ -f "$root_cert_file" ] || {
@@ -1568,6 +1620,8 @@ Optional fallback path:
         exit 1
       }
 
+      active_pin_file="$(resolve_root_pin_file "$pin_file_path")" || exit 0
+
       install -d -m 700 "$verify_work_dir"
       if ! run_command_with_progress \
         "Verifying Root CA YubiKey" \
@@ -1578,7 +1632,7 @@ Please wait and do not remove the token." \
         pd-pki-signing-tools verify-root-yubikey-identity \
           --inventory-dir "$root_inventory_dir" \
           --yubikey-serial "$yubikey_serial" \
-          --pin-file "$pin_file_path" \
+          --pin-file "$active_pin_file" \
           --work-dir "$verify_work_dir"; then
         show_command_failure \
           "Root YubiKey Verification Failed" \
@@ -1629,7 +1683,7 @@ If the YubiKey flashes, touch it to authorize the signing operation." \
           --out-dir "$signed_stage_dir" \
           --issuer-key-uri "$issuer_key_uri" \
           --pkcs11-module "$pkcs11_module_path" \
-          --pkcs11-pin-file "$pin_file_path" \
+          --pkcs11-pin-file "$active_pin_file" \
           --issuer-cert "$root_cert_file" \
           --signer-state-dir "$root_signer_state_dir" \
           --policy-file "$policy_file_path" \

@@ -37,6 +37,7 @@ in
     Ceremony shell defaults:
       umask 077
       PIN_FILE=${ceremonySecretsDirectory}/root-pin.txt
+        optional: the graphical signer wizard prompts on-screen if this file is absent
       ROOT_POLICY_ROOT=${rootPolicyRoot}
       ROOT_INVENTORY_ROOT=${rootInventoryRoot}
       ROOT_CERT_FILE=${rootCertFile}

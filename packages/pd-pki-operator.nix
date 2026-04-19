@@ -3,11 +3,15 @@ pkgs.writeShellApplication {
   name = "pd-pki-operator";
   runtimeInputs = [
     pkgs.coreutils
+    pkgs.dosfstools
     pkgs.dialog
     pkgs.findutils
     pkgs.gnugrep
     pkgs.jq
     pkgs.opensc
+    pkgs.openssl
+    pkgs.parted
+    pkgs.systemd
     pkgs.util-linux
     pkgs.yubico-piv-tool
     pkgs.yubikey-manager
@@ -16,7 +20,9 @@ pkgs.writeShellApplication {
     set -euo pipefail
 
     poll_seconds="2"
+    workflow_mode="main-menu"
     temp_root=""
+    readonly sudo_bin="/run/wrappers/bin/sudo"
 
     cleanup() {
       if [ -n "$temp_root" ] && [ -d "$temp_root" ]; then
@@ -27,30 +33,36 @@ pkgs.writeShellApplication {
     trap cleanup EXIT INT TERM
 
     usage() {
-      cat <<'EOF'
-    Usage: pd-pki-operator [--poll-seconds SECONDS] [--help]
-
-    Interactive operator TUI for exporting root inventory and request bundles
-    to removable media, signing request bundles from removable media, importing
-    signed bundles back into runtime state, and exporting CRLs.
-
-    The root PKCS#11 signing path for intermediate requests requires the
-    inserted token to pass root identity verification against committed root
-    inventory before signing continues.
-
-    Signing supports either PEM issuer key paths or PKCS#11-backed keys such as
-    YubiKey PIV slots. The wizard can discover token certificate objects and
-    guide the operator through entering a token PIN.
-
-    In an interactive terminal the app uses a full-screen dialog interface.
-    Set PD_PKI_OPERATOR_PLAIN=1 to force the line-oriented fallback.
-    EOF
+      printf '%s\n' "Usage: pd-pki-operator [--poll-seconds SECONDS] [--workflow WORKFLOW] [--help]"
+      printf '\n'
+      printf '%s\n' "Interactive operator TUI for exporting root inventory and request bundles"
+      printf '%s\n' "to removable media, signing request bundles from removable media, importing"
+      printf '%s\n' "signed bundles back into runtime state, and exporting CRLs."
+      printf '\n'
+      printf '%s\n' "The root PKCS#11 signing path for intermediate requests requires the"
+      printf '%s\n' "inserted token to pass root identity verification against committed root"
+      printf '%s\n' "inventory before signing continues."
+      printf '\n'
+      printf '%s\n' "Signing supports either PEM issuer key paths or PKCS#11-backed keys such as"
+      printf '%s\n' "YubiKey PIV slots. The wizard can discover token certificate objects and"
+      printf '%s\n' "guide the operator through entering a token PIN."
+      printf '\n'
+      printf '%s\n' "In an interactive terminal the app uses a full-screen dialog interface."
+      printf '%s\n' "Set PD_PKI_OPERATOR_PLAIN=1 to force the line-oriented fallback."
+      printf '\n'
+      printf '%s\n' "Workflows:"
+      printf '%s\n' "  main-menu                 Launch the general operator menu (default)"
+      printf '%s\n' "  root-intermediate-signer  Run the dedicated root intermediate signing wizard"
     }
 
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --poll-seconds)
           poll_seconds="$2"
+          shift 2
+          ;;
+        --workflow)
+          workflow_mode="$2"
           shift 2
           ;;
         -h|--help)
@@ -68,6 +80,16 @@ pkgs.writeShellApplication {
     case "$poll_seconds" in
       *[!0-9]*|"")
         printf '%s\n' "--poll-seconds must be an unsigned integer" >&2
+        exit 2
+        ;;
+    esac
+
+    case "$workflow_mode" in
+      main-menu|root-intermediate-signer)
+        ;;
+      *)
+        printf '%s\n' "Unknown workflow: $workflow_mode" >&2
+        usage >&2
         exit 2
         ;;
     esac
@@ -185,6 +207,21 @@ pkgs.writeShellApplication {
       local title="$1"
       local text="$2"
       dialog_run --title "$title" --msgbox "$text" 18 80
+    }
+
+    show_error() {
+      local title="$1"
+      local text="$2"
+
+      if ui_is_dialog; then
+        dialog_run --title "$title" --msgbox "$text" 18 80
+        return 0
+      fi
+
+      divider
+      printf '%s\n' "$title" >&2
+      printf '%b\n' "$text" >&2
+      divider >&2
     }
 
     dialog_menu_height() {
@@ -396,6 +433,20 @@ pkgs.writeShellApplication {
       jq -r '.csrFile // empty' "$1/request.json" 2>/dev/null || true
     }
 
+    request_bundle_csr_path() {
+      local bundle_dir="$1"
+      local csr_file=""
+
+      csr_file="$(request_bundle_csr_file "$bundle_dir")"
+      if [ -n "$csr_file" ] && [ -f "$bundle_dir/$csr_file" ]; then
+        printf '%s' "$bundle_dir/$csr_file"
+        return 0
+      fi
+      if [ -f "$bundle_dir/csr.pem" ]; then
+        printf '%s' "$bundle_dir/csr.pem"
+      fi
+    }
+
     signed_bundle_serial() {
       jq -r '.serial // empty' "$1/metadata.json" 2>/dev/null || true
     }
@@ -527,6 +578,74 @@ pkgs.writeShellApplication {
       fi
     }
 
+    wait_for_yubikey_insertion() {
+      local answer=""
+      local serials=""
+
+      while true; do
+        serials="$(detect_yubikey_serials)"
+        if [ -n "$serials" ]; then
+          if ui_is_dialog; then
+            dialog_info "YubiKey Detected" "Detected YubiKey serial(s):\n$serials"
+          else
+            divider
+            printf '%s\n' "Detected YubiKey serial(s):"
+            printf '  %s\n' "$serials"
+          fi
+          return 0
+        fi
+
+        if ui_is_dialog; then
+          dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Insert YubiKey" --infobox "Insert the root CA YubiKey now.\n\nThe ceremony will continue when the token is detected.\n\nPress q to cancel." 14 80
+          if answer="$(read_key_with_timeout "$poll_seconds")"; then
+            case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+              q) return 1 ;;
+            esac
+          fi
+          continue
+        fi
+
+        print_header
+        printf '%s\n' "Insert the root CA YubiKey now."
+        printf '%s' "Press Enter to keep waiting or q to cancel: " >&2
+        IFS= read -r answer
+        case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+          q) return 1 ;;
+        esac
+      done
+    }
+
+    wait_for_yubikey_removal() {
+      local answer=""
+      local serials=""
+
+      while true; do
+        serials="$(detect_yubikey_serials)"
+        if [ -z "$serials" ]; then
+          return 0
+        fi
+
+        if ui_is_dialog; then
+          dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Remove YubiKey" --infobox "Remove the YubiKey now.\n\nStill detected:\n$serials\n\nPress q to cancel." 15 80
+          if answer="$(read_key_with_timeout "$poll_seconds")"; then
+            case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+              q) return 1 ;;
+            esac
+          fi
+          continue
+        fi
+
+        print_header
+        printf '%s\n' "Remove the YubiKey now."
+        printf '%s\n' "Still detected: $(printf '%s\n' "$serials" | paste -sd ', ' -)"
+        printf '%s' "Press Enter after removing it or q to cancel: " >&2
+        IFS= read -r answer
+        case "$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')" in
+          q) return 1 ;;
+        esac
+      done
+    }
+
     read_key_with_timeout() {
       local timeout_seconds="$1"
       local key=""
@@ -606,6 +725,341 @@ pkgs.writeShellApplication {
         umask 077
         printf '%s\n' "$secret" > "$target_path"
       )
+    }
+
+    run_privileged() {
+      "$sudo_bin" -n "$@"
+    }
+
+    default_or_prompt_existing_file() {
+      local label="$1"
+      local default_value="$2"
+
+      if [ -n "$default_value" ] && [ -f "$default_value" ]; then
+        printf '%s' "$default_value"
+        return 0
+      fi
+
+      prompt_existing_file "$label" "$default_value" "required"
+    }
+
+    default_or_prompt_existing_dir() {
+      local label="$1"
+      local default_value="$2"
+
+      if [ -n "$default_value" ] && [ -d "$default_value" ]; then
+        printf '%s' "$default_value"
+        return 0
+      fi
+
+      prompt_existing_dir "$label" "$default_value" "required"
+    }
+
+    block_source_to_disk_path() {
+      local source_path="$1"
+      local parent_name=""
+
+      [ -b "$source_path" ] || return 0
+      parent_name="$(lsblk -ndo PKNAME "$source_path" 2>/dev/null || true)"
+      if [ -n "$parent_name" ]; then
+        printf '/dev/%s' "$parent_name"
+      else
+        printf '%s' "$source_path"
+      fi
+    }
+
+    list_system_disk_paths() {
+      local mount_path=""
+      local source_path=""
+      local disk_path=""
+
+      for mount_path in / /boot /boot/efi /boot/firmware; do
+        source_path="$(findmnt -n -o SOURCE --target "$mount_path" 2>/dev/null || true)"
+        [ -n "$source_path" ] || continue
+        disk_path="$(block_source_to_disk_path "$source_path")"
+        [ -n "$disk_path" ] || continue
+        printf '%s\n' "$disk_path"
+      done | sort -u
+    }
+
+    path_is_listed() {
+      local needle="$1"
+      shift
+      local candidate=""
+
+      for candidate in "$@"; do
+        if [ "$candidate" = "$needle" ]; then
+          return 0
+        fi
+      done
+
+      return 1
+    }
+
+    disk_identity_for_usb_disk() {
+      local serial="$1"
+      local vendor="$2"
+      local model="$3"
+      local size="$4"
+      local disk_path="$5"
+
+      if [ -n "$serial" ]; then
+        printf 'serial:%s' "$serial"
+      elif [ -n "$vendor$model$size" ]; then
+        printf 'descriptor:%s|%s|%s' "$vendor" "$model" "$size"
+      else
+        printf 'path:%s' "$disk_path"
+      fi
+    }
+
+    list_usb_disks() {
+      local -a excluded_disk_identities=("$@")
+      local disk_path=""
+      local disk_identity=""
+      local size=""
+      local serial=""
+      local vendor=""
+      local model=""
+      local description=""
+      local -a system_disks=()
+
+      mapfile -t system_disks < <(list_system_disk_paths)
+
+      lsblk -J -o PATH,RM,TRAN,TYPE,SIZE,LABEL,SERIAL,VENDOR,MODEL 2>/dev/null |
+        jq -r '
+          [
+            .blockdevices[]?
+            | select(.type == "disk")
+            | select(((.tran // "") == "usb") or (((.rm // 0) | tostring) == "1"))
+            | [
+                (.path // ""),
+                (.size // ""),
+                (.serial // ""),
+                (.vendor // ""),
+                (.model // ""),
+                ([.vendor // "", .model // "", .serial // "", .label // ""] | map(select(. != "")) | join(" "))
+              ]
+            | @tsv
+          ][]
+        ' 2>/dev/null |
+        while IFS=$'\t' read -r disk_path size serial vendor model description; do
+          [ -n "$disk_path" ] || continue
+          if path_is_listed "$disk_path" "''${system_disks[@]}"; then
+            continue
+          fi
+          disk_identity="$(disk_identity_for_usb_disk "$serial" "$vendor" "$model" "$size" "$disk_path")"
+          if [ "''${#excluded_disk_identities[@]}" -gt 0 ] && path_is_listed "$disk_identity" "''${excluded_disk_identities[@]}"; then
+            continue
+          fi
+          [ -n "$description" ] || description="$disk_path"
+          printf '%s\t%s\t%s\t%s\n' "$disk_path" "$disk_identity" "$size" "$description"
+        done
+    }
+
+    list_disk_mount_paths() {
+      local disk_path="$1"
+
+      lsblk -J -o PATH,TYPE,MOUNTPOINTS "$disk_path" 2>/dev/null |
+        jq -r '
+          .blockdevices[]? | recurse(.children[]?)
+          | (.mountpoints // [])[]?
+          | select(. != null and . != "")
+        ' 2>/dev/null |
+        awk '{ print length, $0 }' |
+        sort -rn |
+        cut -d" " -f2-
+    }
+
+    unmount_disk_mount_paths() {
+      local disk_path="$1"
+      local mount_path=""
+
+      while IFS= read -r mount_path; do
+        [ -n "$mount_path" ] || continue
+        run_privileged umount "$mount_path"
+      done < <(list_disk_mount_paths "$disk_path")
+    }
+
+    expected_first_partition_path_for_disk() {
+      local disk_path="$1"
+      local disk_name=""
+
+      disk_name="$(basename "$disk_path")"
+      case "$disk_name" in
+        *[0-9])
+          printf '%sp1' "$disk_path"
+          ;;
+        *)
+          printf '%s1' "$disk_path"
+          ;;
+      esac
+    }
+
+    first_partition_path_for_disk() {
+      local disk_path="$1"
+      local expected_partition_path=""
+
+      expected_partition_path="$(expected_first_partition_path_for_disk "$disk_path")"
+      {
+        lsblk -nrpo PATH,TYPE "$disk_path" 2>/dev/null |
+          awk '$2 == "part" { print $1; exit }'
+        if [ -b "$expected_partition_path" ]; then
+          printf '%s\n' "$expected_partition_path"
+        fi
+      } |
+        awk 'NF { print; exit }'
+    }
+
+    rescan_disk_partition_table() {
+      local disk_path="$1"
+
+      run_privileged partprobe "$disk_path" >/dev/null 2>&1 || true
+      run_privileged blockdev --rereadpt "$disk_path" >/dev/null 2>&1 || true
+      run_privileged partx -u "$disk_path" >/dev/null 2>&1 || true
+      udevadm settle --timeout=5 >/dev/null 2>&1 || true
+    }
+
+    wait_for_partition_path() {
+      local disk_path="$1"
+      local partition_path=""
+      local retries_remaining="15"
+
+      while [ "$retries_remaining" -gt 0 ]; do
+        partition_path="$(first_partition_path_for_disk "$disk_path" || true)"
+        if [ -n "$partition_path" ]; then
+          printf '%s' "$partition_path"
+          return 0
+        fi
+
+        rescan_disk_partition_table "$disk_path"
+        retries_remaining="$((retries_remaining - 1))"
+        sleep 1
+      done
+
+      return 1
+    }
+
+    run_logged_command() {
+      local log_path="$1"
+      shift
+      local argument=""
+
+      {
+        printf '$'
+        for argument in "$@"; do
+          printf ' %q' "$argument"
+        done
+        printf '\n'
+        "$@"
+      } >> "$log_path" 2>&1
+    }
+
+    format_and_mount_export_disk() {
+      local disk_path="$1"
+      local mount_path="$2"
+      local volume_label="$3"
+      local partition_path=""
+      local format_log=""
+
+      format_log="$(mktemp "/tmp/pd-pki-sign-export.XXXXXX.log")"
+
+      if ! unmount_disk_mount_paths "$disk_path" >> "$format_log" 2>&1; then
+        show_error "Drive Preparation Failed" "The selected removable disk could not be unmounted before formatting:
+$disk_path
+
+Review:
+$format_log"
+        return 1
+      fi
+
+      if ! run_logged_command "$format_log" "$sudo_bin" -n wipefs -af "$disk_path"; then
+        show_error "Drive Preparation Failed" "The selected removable disk could not be wiped:
+$disk_path
+
+Review:
+$format_log"
+        return 1
+      fi
+
+      if ! run_logged_command "$format_log" "$sudo_bin" -n parted -s "$disk_path" mklabel gpt; then
+        show_error "Drive Preparation Failed" "The selected removable disk could not be repartitioned:
+$disk_path
+
+Review:
+$format_log"
+        return 1
+      fi
+
+      if ! run_logged_command "$format_log" "$sudo_bin" -n parted -s -a optimal "$disk_path" mkpart primary fat32 1MiB 100%; then
+        show_error "Drive Preparation Failed" "The FAT32 partition could not be created on:
+$disk_path
+
+Review:
+$format_log"
+        return 1
+      fi
+
+      partition_path="$(wait_for_partition_path "$disk_path")" || {
+        show_error "Drive Preparation Failed" "The new partition did not appear after formatting:
+$disk_path
+
+Review:
+$format_log"
+        return 1
+      }
+
+      if ! run_logged_command "$format_log" "$sudo_bin" -n mkfs.vfat -F 32 -n "$volume_label" "$partition_path"; then
+        show_error "Drive Preparation Failed" "The new FAT32 filesystem could not be created on:
+$partition_path
+
+Review:
+$format_log"
+        return 1
+      fi
+
+      install -d -m 700 "$mount_path"
+      if ! run_logged_command "$format_log" "$sudo_bin" -n mount -t vfat -o "uid=$(id -u),gid=$(id -g),umask=077" "$partition_path" "$mount_path"; then
+        rmdir "$mount_path" 2>/dev/null || true
+        show_error "Drive Preparation Failed" "The freshly formatted removable disk could not be mounted:
+$partition_path
+
+Review:
+$format_log"
+        return 1
+      fi
+
+      rm -f "$format_log"
+      printf '%s' "$partition_path"
+    }
+
+    mount_existing_disk_read_only() {
+      local disk_path="$1"
+      local mount_path="$2"
+      local partition_path=""
+      local existing_mount=""
+
+      partition_path="$(first_partition_path_for_disk "$disk_path" || true)"
+      if [ -z "$partition_path" ]; then
+        show_error "Request USB Mount Failed" "No readable partition was found on:
+$disk_path"
+        return 1
+      fi
+
+      existing_mount="$(findmnt -n -o TARGET --source "$partition_path" 2>/dev/null | head -n1 || true)"
+      if [ -n "$existing_mount" ]; then
+        printf '%s' "$existing_mount"
+        return 0
+      fi
+
+      install -d -m 700 "$mount_path"
+      if ! run_privileged mount -o ro "$partition_path" "$mount_path"; then
+        rmdir "$mount_path" 2>/dev/null || true
+        show_error "Request USB Mount Failed" "The request USB partition could not be mounted read-only:
+$partition_path"
+        return 1
+      fi
+
+      printf '%s' "$mount_path"
     }
 
     list_pkcs11_certificate_objects() {
@@ -934,6 +1388,69 @@ pkgs.writeShellApplication {
       fi
       if [ -n "$sans" ]; then
         printf '%s\n' "Subject alternative names: $sans"
+      fi
+    }
+
+    csr_subject() {
+      openssl req -in "$1" -noout -subject 2>/dev/null | sed 's/^subject= *//' || true
+    }
+
+    csr_public_key_algorithm() {
+      openssl req -in "$1" -noout -text 2>/dev/null |
+        awk -F': ' '/Public Key Algorithm/ { print $2; exit }' || true
+    }
+
+    csr_public_key_bits() {
+      openssl req -in "$1" -noout -text 2>/dev/null |
+        awk -F'[()]' '/Public-Key:/ { print $2; exit }' |
+        sed 's/ bits\{0,1\}$//' || true
+    }
+
+    csr_basic_constraints() {
+      openssl req -in "$1" -noout -text 2>/dev/null |
+        awk '
+          /X509v3 Basic Constraints/ {
+            getline
+            gsub(/^[[:space:]]+/, "", $0)
+            print
+            exit
+          }
+        ' || true
+    }
+
+    request_bundle_review_text() {
+      local bundle_dir="$1"
+      local csr_path=""
+      local subject=""
+      local algorithm=""
+      local bits=""
+      local constraints=""
+
+      request_bundle_summary_text "$bundle_dir"
+      csr_path="$(request_bundle_csr_path "$bundle_dir")"
+      if [ -z "$csr_path" ]; then
+        return 0
+      fi
+
+      subject="$(csr_subject "$csr_path")"
+      algorithm="$(csr_public_key_algorithm "$csr_path")"
+      bits="$(csr_public_key_bits "$csr_path")"
+      constraints="$(csr_basic_constraints "$csr_path")"
+
+      if [ -n "$subject" ]; then
+        printf '%s\n' "CSR subject: $subject"
+      fi
+      if [ -n "$algorithm" ] || [ -n "$bits" ]; then
+        if [ -n "$algorithm" ] && [ -n "$bits" ]; then
+          printf '%s\n' "CSR key: $algorithm ($bits bits)"
+        elif [ -n "$algorithm" ]; then
+          printf '%s\n' "CSR key: $algorithm"
+        else
+          printf '%s\n' "CSR key size: $bits bits"
+        fi
+      fi
+      if [ -n "$constraints" ]; then
+        printf '%s\n' "CSR basic constraints: $constraints"
       fi
     }
 
@@ -1679,6 +2196,314 @@ pkgs.writeShellApplication {
       done
     }
 
+    inventory_root_key_uri() {
+      local inventory_dir="$1"
+
+      if [ -f "$inventory_dir/root-key-uri.txt" ]; then
+        tr -d '\n' < "$inventory_dir/root-key-uri.txt"
+      fi
+    }
+
+    stable_yubikey_private_key_uri_from_inventory() {
+      local inventory_dir="$1"
+      local inventory_uri=""
+      local object_id=""
+
+      inventory_uri="$(inventory_root_key_uri "$inventory_dir")"
+      object_id="$(printf '%s\n' "$inventory_uri" | sed -n 's/.*[;:]id=\([^;]*\).*/\1/p' | head -n1)"
+
+      if [ -n "$object_id" ]; then
+        printf 'pkcs11:token=YubiKey%%20PIV;id=%s;type=private' "$object_id"
+        return 0
+      fi
+
+      printf '%s' "$inventory_uri"
+    }
+
+    choose_usb_disk() {
+      local intro="$1"
+      shift
+      local -a excluded_disk_identities=("$@")
+      local choice=""
+      local selected_line=""
+      local disk_path=""
+      local size=""
+      local description=""
+      local -a disk_lines=()
+      local -a menu_items=()
+
+      while true; do
+        mapfile -t disk_lines < <(list_usb_disks "''${excluded_disk_identities[@]}")
+
+        if ui_is_dialog && [ "''${#disk_lines[@]}" -eq 0 ]; then
+          while [ "''${#disk_lines[@]}" -eq 0 ]; do
+            dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Waiting For Removable Media" --infobox "$intro\n\nNo removable disks detected yet.\n\nInsert the drive now.\n\nPress q to cancel." 15 90
+            if choice="$(read_key_with_timeout "$poll_seconds")"; then
+              case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+                q)
+                  return 1
+                  ;;
+              esac
+            fi
+            mapfile -t disk_lines < <(list_usb_disks "''${excluded_disk_identities[@]}")
+          done
+        fi
+
+        if [ "''${#disk_lines[@]}" -eq 0 ]; then
+          print_header
+          printf '%s\n' "$intro"
+          printf '%s\n' "No removable disks were detected."
+          printf '%s' "Press Enter to refresh or q to cancel: " >&2
+          IFS= read -r choice
+          case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+            q) return 1 ;;
+          esac
+          continue
+        fi
+
+        if [ "''${#disk_lines[@]}" -eq 1 ]; then
+          printf '%s' "''${disk_lines[0]}"
+          return 0
+        fi
+
+        if ui_is_dialog; then
+          menu_items=()
+          local index="1"
+          for selected_line in "''${disk_lines[@]}"; do
+            IFS=$'\t' read -r disk_path _ size description <<< "$selected_line"
+            menu_items+=("$index" "$disk_path | $size | $description")
+            index=$((index + 1))
+          done
+          choice="$(dialog_run --title "Choose Removable Disk" --menu "$intro" 20 110 "$(dialog_menu_height)" "''${menu_items[@]}")" || return 1
+          selected_line="''${disk_lines[$((choice - 1))]}"
+          printf '%s' "$selected_line"
+          return 0
+        fi
+
+        print_header
+        printf '%s\n' "$intro"
+        printf '%s\n' "Detected removable disks:"
+        local index="1"
+        for selected_line in "''${disk_lines[@]}"; do
+          IFS=$'\t' read -r disk_path _ size description <<< "$selected_line"
+          printf '%s\n' "  $index. $disk_path"
+          printf '%s\n' "     size: $size"
+          printf '%s\n' "     details: $description"
+          index=$((index + 1))
+        done
+        printf '%s' "Select a disk number, or q to cancel: " >&2
+        IFS= read -r choice
+        case "$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')" in
+          q) return 1 ;;
+          *[!0-9]*|"")
+            printf '%s\n' "Please choose a number or q." >&2
+            continue
+            ;;
+        esac
+        if [ "$choice" -lt 1 ] || [ "$choice" -gt "''${#disk_lines[@]}" ]; then
+          printf '%s\n' "That selection is out of range." >&2
+          continue
+        fi
+        selected_line="''${disk_lines[$((choice - 1))]}"
+        printf '%s' "$selected_line"
+        return 0
+      done
+    }
+
+    root_intermediate_signer_flow() {
+      local request_disk_line=""
+      local request_disk_path=""
+      local request_usb_mount=""
+      local request_usb_bundle=""
+      local workflow_dir="$temp_root/root-intermediate-signer"
+      local request_mount_path="$workflow_dir/request-usb"
+      local request_stage_dir="$workflow_dir/request-bundle"
+      local signed_stage_dir="$workflow_dir/signed-bundle"
+      local export_mount_path="$workflow_dir/export-usb"
+      local verify_work_dir="$workflow_dir/verify-root-yubikey"
+      local request_role=""
+      local request_review=""
+      local issuer_cert=""
+      local signer_state_dir=""
+      local policy_file=""
+      local pin_file=""
+      local approved_by=""
+      local root_inventory_root=""
+      local root_inventory_dir=""
+      local root_yubikey_serial=""
+      local pkcs11_module=""
+      local issuer_key_uri=""
+      local sign_confirmation=""
+      local signed_bundle_name=""
+      local export_disk_line=""
+      local export_disk_path=""
+      local export_disk_size=""
+      local export_disk_description=""
+      local export_partition_path=""
+      local export_destination_dir=""
+
+      if ui_is_dialog; then
+        dialog_info "Root Intermediate Signer" "This ceremony will:\n\n1. Copy one intermediate request bundle from removable media onto the signer.\n2. Require operator review of the CSR details.\n3. Verify the inserted root CA YubiKey against committed root inventory.\n4. Sign the CSR.\n5. Format a fresh removable drive for the signed output bundle.\n\nBefore continuing, confirm the committed root inventory is present on this workstation and the root signer policy plus root PIN file are available locally."
+      else
+        print_header
+        printf '%s\n' "This ceremony will:"
+        printf '%s\n' "  1. Copy one intermediate request bundle from removable media onto the signer."
+        printf '%s\n' "  2. Require operator review of the CSR details."
+        printf '%s\n' "  3. Verify the inserted root CA YubiKey against committed root inventory."
+        printf '%s\n' "  4. Sign the CSR."
+        printf '%s\n' "  5. Format a fresh removable drive for the signed output bundle."
+        printf '%s\n' ""
+        printf '%s\n' "Confirm the committed root inventory is present on this workstation and the root signer policy plus root PIN file are available locally."
+      fi
+
+      if ! prompt_yes_no "Proceed with the root intermediate signing ceremony?" "y"; then
+        return 0
+      fi
+
+      rm -rf "$workflow_dir"
+      mkdir -p "$workflow_dir"
+
+      request_disk_line="$(choose_usb_disk "Insert the USB thumb drive that holds the intermediate CSR request bundle.")" || return 0
+      IFS=$'\t' read -r request_disk_path _ _ _ <<< "$request_disk_line"
+      request_usb_mount="$(mount_existing_disk_read_only "$request_disk_path" "$request_mount_path")" || return 1
+      request_usb_bundle="$(choose_request_bundle_from_mount "$request_usb_mount")" || return 0
+
+      rm -rf "$request_stage_dir"
+      copy_bundle_dir "$request_usb_bundle" "$request_stage_dir"
+
+      if findmnt -n --target "$request_usb_mount" >/dev/null 2>&1; then
+        run_privileged umount "$request_usb_mount" >/dev/null 2>&1 || true
+      fi
+
+      if ui_is_dialog; then
+        dialog_info "Request Bundle Downloaded" "The request bundle has been copied locally to:\n$request_stage_dir\n\nRemove the request USB drive now, then continue to review the CSR."
+      else
+        print_header
+        printf '%s\n' "Request bundle copied locally to $request_stage_dir"
+        printf '%s\n' "Remove the request USB drive now."
+        pause
+      fi
+
+      request_role="$(request_bundle_role "$request_stage_dir")"
+      if [ "$request_role" != "intermediate-signing-authority" ]; then
+        show_error "Unsupported Request Bundle" "This dedicated signer workflow only accepts intermediate signing authority request bundles.\n\nDetected role:\n$request_role"
+        return 1
+      fi
+
+      request_review="$(request_bundle_review_text "$request_stage_dir")"
+      if ui_is_dialog; then
+        dialog_info "CSR Review" "$request_review"
+      else
+        divider
+        printf '%s\n' "Review the copied CSR details"
+        printf '%s\n' "$request_review"
+        divider
+      fi
+      if ! prompt_yes_no "Does this request match the approved intermediate CA issuance?" "n"; then
+        return 0
+      fi
+
+      issuer_cert="$(default_or_prompt_existing_file "Root certificate path" "''${ROOT_CERT_FILE:-$(issuer_default_cert_path root)}")" || return 0
+      signer_state_dir="$(default_or_prompt_existing_dir "Root signer state directory" "''${ROOT_SIGNER_STATE_DIR:-$(issuer_default_signer_state_dir root)}")" || return 0
+      policy_file="$(default_or_prompt_existing_file "Root signer policy file" "''${ROOT_POLICY_FILE:-}")" || return 0
+      pin_file="$(default_or_prompt_existing_file "Root YubiKey PIN file" "''${PIN_FILE:-}")" || return 0
+      root_inventory_root="''${ROOT_INVENTORY_ROOT:-/var/lib/pd-pki/inventory/root-ca}"
+      root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
+      root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
+      show_root_inventory_summary "$root_inventory_dir"
+
+      wait_for_yubikey_insertion || return 0
+      root_yubikey_serial="$(choose_yubikey_serial)" || return 0
+      pkcs11_module="$(issuer_default_pkcs11_module root)"
+      issuer_key_uri="$(stable_yubikey_private_key_uri_from_inventory "$root_inventory_dir")"
+      if [ -z "$issuer_key_uri" ]; then
+        issuer_key_uri="$(choose_pkcs11_key_uri "$pkcs11_module")" || return 0
+      fi
+
+      rm -rf "$verify_work_dir"
+      mkdir -p "$verify_work_dir"
+      if ui_is_dialog; then
+        dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Verifying Root CA YubiKey" --infobox "Verifying the inserted root CA YubiKey against:\n$root_inventory_dir\n\nYubiKey serial: $root_yubikey_serial" 14 90
+      else
+        print_header
+        printf '%s\n' "Verifying the inserted root CA YubiKey against $root_inventory_dir"
+        printf '%s\n' "YubiKey serial: $root_yubikey_serial"
+      fi
+      pd-pki-signing-tools verify-root-yubikey-identity \
+        --inventory-dir "$root_inventory_dir" \
+        --yubikey-serial "$root_yubikey_serial" \
+        --pin-file "$pin_file" \
+        --work-dir "$verify_work_dir"
+      show_root_yubikey_identity_summary "$verify_work_dir/root-yubikey-identity-summary.json"
+
+      approved_by="$(prompt_text "Approved by" "$(default_operator_id)")" || return 0
+      if [ -z "$approved_by" ]; then
+        show_error "Missing Approval Attribution" "An operator identifier is required to record this issuance."
+        return 1
+      fi
+
+      sign_confirmation="Proceed with signing this intermediate CSR using the verified root CA YubiKey?\n\nRequest: $(request_bundle_common_name "$request_stage_dir")\nInventory: $(root_inventory_bundle_root_id "$root_inventory_dir")\nApproved by: $approved_by"
+      if ! prompt_yes_no "$sign_confirmation" "y"; then
+        return 0
+      fi
+
+      rm -rf "$signed_stage_dir"
+      mkdir -p "$signed_stage_dir"
+      if ui_is_dialog; then
+        dialog --clear --backtitle "Pseudo Design PKI Operator" --title "Signing Intermediate CSR" --infobox "Signing the reviewed intermediate request bundle with the verified root CA YubiKey." 12 80
+      fi
+      pd-pki-signing-tools sign-request \
+        --request-dir "$request_stage_dir" \
+        --out-dir "$signed_stage_dir" \
+        --issuer-key-uri "$issuer_key_uri" \
+        --pkcs11-module "$pkcs11_module" \
+        --pkcs11-pin-file "$pin_file" \
+        --issuer-cert "$issuer_cert" \
+        --signer-state-dir "$signer_state_dir" \
+        --policy-file "$policy_file" \
+        --approved-by "$approved_by"
+
+      show_signed_bundle_summary "$signed_stage_dir"
+      wait_for_yubikey_removal || return 0
+
+      export_disk_line="$(choose_usb_disk "Insert a fresh USB thumb drive for the signed output bundle. This drive will be reformatted before the signed artifacts are written.")" || return 0
+      IFS=$'\t' read -r export_disk_path _ export_disk_size export_disk_description <<< "$export_disk_line"
+
+      if ! prompt_yes_no "The selected removable disk will be reformatted before the signed bundle is written.\n\nDisk: $export_disk_path\nSize: $export_disk_size\nDetails: $export_disk_description\n\nContinue only if this is the correct fresh output drive." "n"; then
+        return 0
+      fi
+
+      rm -rf "$export_mount_path"
+      mkdir -p "$export_mount_path"
+      export_partition_path="$(format_and_mount_export_disk "$export_disk_path" "$export_mount_path" "PDPKISIGNED")" || return 1
+
+      signed_bundle_name="intermediate-signed-$(current_timestamp_utc)"
+      export_destination_dir="$export_mount_path/pd-pki-transfer/signed/$signed_bundle_name"
+      if ! copy_bundle_dir "$signed_stage_dir" "$export_destination_dir"; then
+        run_privileged umount "$export_mount_path" >/dev/null 2>&1 || true
+        show_error "Signed Bundle Export Failed" "The signed bundle could not be copied to the formatted USB drive."
+        return 1
+      fi
+
+      sync "$export_destination_dir" >/dev/null 2>&1 || sync >/dev/null 2>&1 || true
+      if ! run_privileged umount "$export_mount_path"; then
+        show_error "Signed Bundle Export Incomplete" "The signed bundle was copied to the formatted USB drive, but the mounted filesystem could not be unmounted safely.\n\nMount path:\n$export_mount_path"
+        return 1
+      fi
+
+      if ui_is_dialog; then
+        dialog_info "Signed Bundle Ready" "The fresh USB drive was reformatted and the signed intermediate bundle was written successfully.\n\nDisk: $export_disk_path\nPartition: $export_partition_path\nBundle path: pd-pki-transfer/signed/$signed_bundle_name\n\nThe filesystem has been unmounted. Remove and transport the drive now."
+      else
+        print_header
+        printf '%s\n' "The fresh USB drive was reformatted and the signed intermediate bundle was written successfully."
+        printf '%s\n' "Disk: $export_disk_path"
+        printf '%s\n' "Partition: $export_partition_path"
+        printf '%s\n' "Bundle path: pd-pki-transfer/signed/$signed_bundle_name"
+        printf '%s\n' "The filesystem has been unmounted. Remove and transport the drive now."
+        pause
+      fi
+    }
+
     export_root_inventory_flow() {
       local source_dir=""
       local usb_mount=""
@@ -2082,6 +2907,13 @@ pkgs.writeShellApplication {
       done
     }
 
-    main_menu
+    case "$workflow_mode" in
+      main-menu)
+        main_menu
+        ;;
+      root-intermediate-signer)
+        root_intermediate_signer_flow
+        ;;
+    esac
   '';
 }

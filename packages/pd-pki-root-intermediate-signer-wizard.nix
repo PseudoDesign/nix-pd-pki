@@ -26,7 +26,8 @@ pkgs.writeShellApplication {
     readonly session_home="''${HOME:-/var/lib/pd-pki}"
     readonly sessions_root="$session_home/root-intermediate-signing"
     readonly pin_file_path="''${PIN_FILE:-$session_home/secrets/root-pin.txt}"
-    readonly policy_file_path="''${ROOT_POLICY_FILE:-$session_home/policy/root-policy.json}"
+    readonly policy_root="''${ROOT_POLICY_ROOT:-$session_home/policy/root-ca}"
+    readonly policy_file_fallback_path="''${ROOT_POLICY_FILE:-}"
     readonly inventory_root="''${ROOT_INVENTORY_ROOT:-$session_home/inventory/root-ca}"
     readonly root_cert_file="''${ROOT_CERT_FILE:-$session_home/authorities/root/root-ca.cert.pem}"
     readonly root_signer_state_dir="''${ROOT_SIGNER_STATE_DIR:-$session_home/signer-state/root}"
@@ -594,6 +595,23 @@ EOF
       jq -r '.yubiKey.serial // empty' "$1/manifest.json" 2>/dev/null || true
     }
 
+    root_policy_file_for_root_id() {
+      local root_id="$1"
+      local candidate=""
+
+      for candidate in \
+        "$policy_root/$root_id/root-signer-policy.json" \
+        "$policy_root/$root_id/root-policy.json"
+      do
+        if [ -f "$candidate" ]; then
+          printf '%s' "$candidate"
+          return 0
+        fi
+      done
+
+      return 1
+    }
+
     root_inventory_summary_text() {
       local inventory_dir="$1"
       local root_id=""
@@ -614,6 +632,29 @@ EOF
       if [ -n "$yubikey_serial" ]; then
         printf '%s\n' "Recorded YubiKey serial: $yubikey_serial"
       fi
+    }
+
+    resolve_root_signer_policy_file() {
+      local inventory_dir="$1"
+      local fallback_path="$2"
+      local root_id=""
+      local candidate=""
+
+      root_id="$(root_inventory_bundle_root_id "$inventory_dir")"
+      if [ -n "$root_id" ]; then
+        candidate="$(root_policy_file_for_root_id "$root_id" || true)"
+        if [ -n "$candidate" ]; then
+          printf '%s' "$candidate"
+          return 0
+        fi
+      fi
+
+      if [ -n "$fallback_path" ] && [ -f "$fallback_path" ]; then
+        printf '%s' "$fallback_path"
+        return 0
+      fi
+
+      return 1
     }
 
     find_root_inventory_dirs() {
@@ -1352,6 +1393,7 @@ Next steps:
       local request_role=""
       local root_inventory_dir=""
       local root_inventory_summary=""
+      local policy_file_path=""
       local yubikey_serial=""
       local verify_log=""
       local sign_log=""
@@ -1383,11 +1425,6 @@ Next steps:
       [ -x "$sudo_bin" ] || {
         show_error "Missing Dependency" "Required sudo wrapper not found:
 $sudo_bin"
-        exit 1
-      }
-      [ -f "$policy_file_path" ] || {
-        show_error "Missing Policy File" "Root signer policy file not found:
-$policy_file_path"
         exit 1
       }
       [ -f "$pin_file_path" ] || {
@@ -1512,6 +1549,19 @@ Continue only if this is the committed root inventory entry that should authoriz
         exit 0
       fi
 
+      policy_file_path="$(resolve_root_signer_policy_file "$root_inventory_dir" "$policy_file_fallback_path" || true)"
+      if [ -z "$policy_file_path" ]; then
+        show_error "Missing Signer Policy" "No root signer policy file was found for the selected inventory entry.
+
+Expected committed policy at one of:
+$policy_root/$(root_inventory_bundle_root_id "$root_inventory_dir")/root-signer-policy.json
+$policy_root/$(root_inventory_bundle_root_id "$root_inventory_dir")/root-policy.json
+
+Optional fallback path:
+''${policy_file_fallback_path:-<not configured>}"
+        exit 1
+      fi
+
       yubikey_serial="$(wait_for_single_yubikey)"
       [ -n "$yubikey_serial" ] || {
         show_error "No YubiKey Detected" "The wizard could not determine a YubiKey serial."
@@ -1558,6 +1608,7 @@ Please wait and do not remove the token." \
 
 Request common name: $(request_bundle_common_name "$request_stage_dir")
 Root inventory: $(root_inventory_bundle_root_id "$root_inventory_dir")
+Signer policy: $policy_file_path
 YubiKey serial: $yubikey_serial
 Approved by: $approved_by
 

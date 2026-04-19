@@ -3,7 +3,7 @@ let
   ceremonyUser = "pdpki";
   ceremonyHome = "/var/lib/pd-pki";
   ceremonySecretsDirectory = "${ceremonyHome}/secrets";
-  rootPolicyFile = "${ceremonyHome}/policy/root-policy.json";
+  rootPolicyRoot = "${ceremonyHome}/policy/root-ca";
   rootInventoryRoot = "${ceremonyHome}/inventory/root-ca";
   rootCertFile = "${ceremonyHome}/authorities/root/root-ca.cert.pem";
   rootSignerStateDir = "${ceremonyHome}/signer-state/root";
@@ -24,7 +24,7 @@ in
     if [ "''${USER:-}" = ${lib.escapeShellArg ceremonyUser} ] && [ "''${HOME:-}" = ${lib.escapeShellArg ceremonyHome} ]; then
       umask 077
       export PIN_FILE="$HOME/secrets/root-pin.txt"
-      export ROOT_POLICY_FILE=${lib.escapeShellArg rootPolicyFile}
+      export ROOT_POLICY_ROOT=${lib.escapeShellArg rootPolicyRoot}
       export ROOT_INVENTORY_ROOT=${lib.escapeShellArg rootInventoryRoot}
       export ROOT_CERT_FILE=${lib.escapeShellArg rootCertFile}
       export ROOT_SIGNER_STATE_DIR=${lib.escapeShellArg rootSignerStateDir}
@@ -37,7 +37,7 @@ in
     Ceremony shell defaults:
       umask 077
       PIN_FILE=${ceremonySecretsDirectory}/root-pin.txt
-      ROOT_POLICY_FILE=${rootPolicyFile}
+      ROOT_POLICY_ROOT=${rootPolicyRoot}
       ROOT_INVENTORY_ROOT=${rootInventoryRoot}
       ROOT_CERT_FILE=${rootCertFile}
       ROOT_SIGNER_STATE_DIR=${rootSignerStateDir}

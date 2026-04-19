@@ -467,6 +467,46 @@ pkgs.writeShellApplication {
       jq -r '.yubiKey.serial // empty' "$1/manifest.json" 2>/dev/null || true
     }
 
+    root_policy_file_for_root_id() {
+      local root_id="$1"
+      local candidate=""
+
+      for candidate in \
+        "''${ROOT_POLICY_ROOT:-/var/lib/pd-pki/policy/root-ca}/$root_id/root-signer-policy.json" \
+        "''${ROOT_POLICY_ROOT:-/var/lib/pd-pki/policy/root-ca}/$root_id/root-policy.json"
+      do
+        if [ -f "$candidate" ]; then
+          printf '%s' "$candidate"
+          return 0
+        fi
+      done
+
+      return 1
+    }
+
+    resolve_root_signer_policy_file() {
+      local inventory_dir="$1"
+      local fallback_path="$2"
+      local root_id=""
+      local candidate=""
+
+      root_id="$(root_inventory_bundle_root_id "$inventory_dir")"
+      if [ -n "$root_id" ]; then
+        candidate="$(root_policy_file_for_root_id "$root_id" || true)"
+        if [ -n "$candidate" ]; then
+          printf '%s' "$candidate"
+          return 0
+        fi
+      fi
+
+      if [ -n "$fallback_path" ] && [ -f "$fallback_path" ]; then
+        printf '%s' "$fallback_path"
+        return 0
+      fi
+
+      return 1
+    }
+
     root_yubikey_identity_summary_root_id() {
       jq -r '.rootId // empty' "$1" 2>/dev/null || true
     }
@@ -2343,7 +2383,7 @@ $partition_path"
       local export_destination_dir=""
 
       if ui_is_dialog; then
-        dialog_info "Root Intermediate Signer" "This ceremony will:\n\n1. Copy one intermediate request bundle from removable media onto the signer.\n2. Require operator review of the CSR details.\n3. Verify the inserted root CA YubiKey against committed root inventory.\n4. Sign the CSR.\n5. Format a fresh removable drive for the signed output bundle.\n\nBefore continuing, confirm the committed root inventory is present on this workstation and the root signer policy plus root PIN file are available locally."
+        dialog_info "Root Intermediate Signer" "This ceremony will:\n\n1. Copy one intermediate request bundle from removable media onto the signer.\n2. Require operator review of the CSR details.\n3. Verify the inserted root CA YubiKey against committed root inventory.\n4. Sign the CSR.\n5. Format a fresh removable drive for the signed output bundle.\n\nBefore continuing, confirm the committed root inventory and matching root policy tree are present on this workstation and the root PIN file is available locally."
       else
         print_header
         printf '%s\n' "This ceremony will:"
@@ -2353,7 +2393,7 @@ $partition_path"
         printf '%s\n' "  4. Sign the CSR."
         printf '%s\n' "  5. Format a fresh removable drive for the signed output bundle."
         printf '%s\n' ""
-        printf '%s\n' "Confirm the committed root inventory is present on this workstation and the root signer policy plus root PIN file are available locally."
+        printf '%s\n' "Confirm the committed root inventory and matching root policy tree are present on this workstation and the root PIN file is available locally."
       fi
 
       if ! prompt_yes_no "Proceed with the root intermediate signing ceremony?" "y"; then
@@ -2405,12 +2445,23 @@ $partition_path"
 
       issuer_cert="$(default_or_prompt_existing_file "Root certificate path" "''${ROOT_CERT_FILE:-$(issuer_default_cert_path root)}")" || return 0
       signer_state_dir="$(default_or_prompt_existing_dir "Root signer state directory" "''${ROOT_SIGNER_STATE_DIR:-$(issuer_default_signer_state_dir root)}")" || return 0
-      policy_file="$(default_or_prompt_existing_file "Root signer policy file" "''${ROOT_POLICY_FILE:-}")" || return 0
       pin_file="$(default_or_prompt_existing_file "Root YubiKey PIN file" "''${PIN_FILE:-}")" || return 0
       root_inventory_root="''${ROOT_INVENTORY_ROOT:-/var/lib/pd-pki/inventory/root-ca}"
       root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
       root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
       show_root_inventory_summary "$root_inventory_dir"
+      policy_file="$(resolve_root_signer_policy_file "$root_inventory_dir" "''${ROOT_POLICY_FILE:-}" || true)"
+      if [ -z "$policy_file" ]; then
+        show_error "Missing Signer Policy" "No root signer policy file was found for the selected inventory entry.
+
+Expected committed policy at one of:
+''${ROOT_POLICY_ROOT:-/var/lib/pd-pki/policy/root-ca}/$(root_inventory_bundle_root_id "$root_inventory_dir")/root-signer-policy.json
+''${ROOT_POLICY_ROOT:-/var/lib/pd-pki/policy/root-ca}/$(root_inventory_bundle_root_id "$root_inventory_dir")/root-policy.json
+
+Optional fallback path:
+''${ROOT_POLICY_FILE:-<not configured>}"
+        return 1
+      fi
 
       wait_for_yubikey_insertion || return 0
       root_yubikey_serial="$(choose_yubikey_serial)" || return 0
@@ -2442,7 +2493,7 @@ $partition_path"
         return 1
       fi
 
-      sign_confirmation="Proceed with signing this intermediate CSR using the verified root CA YubiKey?\n\nRequest: $(request_bundle_common_name "$request_stage_dir")\nInventory: $(root_inventory_bundle_root_id "$root_inventory_dir")\nApproved by: $approved_by"
+      sign_confirmation="Proceed with signing this intermediate CSR using the verified root CA YubiKey?\n\nRequest: $(request_bundle_common_name "$request_stage_dir")\nInventory: $(root_inventory_bundle_root_id "$root_inventory_dir")\nSigner policy: $policy_file\nApproved by: $approved_by"
       if ! prompt_yes_no "$sign_confirmation" "y"; then
         return 0
       fi
@@ -2634,7 +2685,6 @@ $partition_path"
       issuer_cert="$(prompt_existing_file "Issuer certificate path" "$(issuer_default_cert_path "$issuer_profile")" "required")"
       issuer_chain="$(prompt_existing_file "Issuer chain path (optional for roots)" "$(issuer_default_chain_path "$issuer_profile")" "optional")"
       signer_state_dir="$(prompt_existing_dir "Signer state directory" "$(issuer_default_signer_state_dir "$issuer_profile")" "required")"
-      policy_file="$(prompt_existing_file "Signer policy file" "$policy_file_default" "required")"
       approved_by="$(prompt_text "Approved by" "$(default_operator_id)")"
       approval_ticket="$(prompt_text "Approval ticket (optional)" "")"
       approval_note="$(prompt_text "Approval note (optional)" "")"
@@ -2659,11 +2709,14 @@ $partition_path"
         root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
         root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
         show_root_inventory_summary "$root_inventory_dir"
+        policy_file_default="$(resolve_root_signer_policy_file "$root_inventory_dir" "$policy_file_default" || true)"
         root_yubikey_serial="$(choose_yubikey_serial)" || return 0
         sign_confirmation="Proceed to verify the inserted root CA YubiKey against committed root inventory and sign this intermediate request bundle with $(issuer_profile_title "$issuer_profile") using $(signer_backend_title "$signer_backend")?"
       else
         sign_confirmation="Proceed to sign this bundle with $(issuer_profile_title "$issuer_profile") using $(signer_backend_title "$signer_backend")?"
       fi
+
+      policy_file="$(prompt_existing_file "Signer policy file" "$policy_file_default" "required")"
 
       if ! prompt_yes_no "$sign_confirmation" "y"; then
         return 0

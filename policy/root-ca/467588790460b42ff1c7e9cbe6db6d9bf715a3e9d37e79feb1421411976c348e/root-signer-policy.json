@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "roles": {
+    "intermediate-signing-authority": {
+      "defaultDays": 1825,
+      "maxDays": 1825,
+      "allowedKeyAlgorithms": [
+        "RSA"
+      ],
+      "minimumRsaBits": 3072,
+      "crlDistributionPoints": [
+        "https://pki.pseudo.test/root.crl"
+      ],
+      "commonNamePatterns": [
+        "^Pseudo Design Runtime Intermediate Signing Authority$"
+      ],
+      "allowedPathLens": [
+        0
+      ]
+    }
+  }
+}

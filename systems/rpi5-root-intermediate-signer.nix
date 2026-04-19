@@ -39,6 +39,11 @@ in
   environment.etc."pd-pki/inventory/root-ca".source = ../inventory/root-ca;
   environment.etc."pd-pki/policy/root-ca".source = ../policy/root-ca;
 
+  systemd.tmpfiles.rules = [
+    "d ${ceremonyHome}/signer-state 0700 ${ceremonyUser} ${ceremonyUser} -"
+    "d ${rootSignerStateDir} 0700 ${ceremonyUser} ${ceremonyUser} -"
+  ];
+
   environment.etc."motd".text = ''
     Pseudo Design offline root CA intermediate signer
 

@@ -798,6 +798,20 @@ pkgs.writeShellApplication {
       "$sudo_bin" -n "$@"
     }
 
+    ensure_writable_directory() {
+      local target_dir="$1"
+
+      if install -d -m 700 "$target_dir" 2>/dev/null; then
+        return 0
+      fi
+
+      if run_privileged install -d -m 700 -o "$(id -un)" -g "$(id -gn)" "$target_dir" 2>/dev/null; then
+        return 0
+      fi
+
+      [ -d "$target_dir" ] && [ -w "$target_dir" ]
+    }
+
     default_or_prompt_existing_file() {
       local label="$1"
       local default_value="$2"
@@ -2473,7 +2487,20 @@ $partition_path"
         return 0
       fi
 
-      signer_state_dir="$(default_or_prompt_existing_dir "Root signer state directory" "''${ROOT_SIGNER_STATE_DIR:-$(issuer_default_signer_state_dir root)}")" || return 0
+      signer_state_dir="$(prompt_text "Root signer state directory" "''${ROOT_SIGNER_STATE_DIR:-$(issuer_default_signer_state_dir root)}")" || return 0
+      signer_state_dir="$(trim_whitespace "$signer_state_dir")"
+      if [ -z "$signer_state_dir" ]; then
+        show_error "Missing Signer State Directory" "A root signer state directory is required."
+        return 1
+      fi
+      if ! ensure_writable_directory "$signer_state_dir"; then
+        show_error "Signer State Unavailable" "The operator could not prepare the root signer state directory:
+
+$signer_state_dir
+
+The signing tool can initialize signer state here, but this ceremony session must be able to create and write that directory."
+        return 1
+      fi
       root_inventory_root="''${ROOT_INVENTORY_ROOT:-/var/lib/pd-pki/inventory/root-ca}"
       root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
       root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"

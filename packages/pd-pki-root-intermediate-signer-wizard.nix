@@ -119,6 +119,20 @@ pkgs.writeShellApplication {
       "$sudo_bin" -n "$@"
     }
 
+    ensure_writable_directory() {
+      local target_dir="$1"
+
+      if install -d -m 700 "$target_dir" 2>/dev/null; then
+        return 0
+      fi
+
+      if run_privileged install -d -m 700 -o "$(id -un)" -g "$(id -gn)" "$target_dir" 2>/dev/null; then
+        return 0
+      fi
+
+      [ -d "$target_dir" ] && [ -w "$target_dir" ]
+    }
+
     read_sysfs_value() {
       local path="$1"
       if [ -f "$path" ]; then
@@ -1512,13 +1526,15 @@ Next steps:
 $sudo_bin"
         exit 1
       }
-      [ -d "$root_signer_state_dir" ] || {
-        show_error "Missing Signer State" "Root signer state directory not found:
-$root_signer_state_dir"
-        exit 1
-      }
 
       install -d -m 700 "$sessions_root"
+      if ! ensure_writable_directory "$root_signer_state_dir"; then
+        show_error "Signer State Unavailable" "The wizard could not prepare the root signer state directory:
+$root_signer_state_dir
+
+The signing tool can initialize signer state here, but this ceremony session must be able to create and write that directory."
+        exit 1
+      fi
 
       wait_for_usb_clear
 

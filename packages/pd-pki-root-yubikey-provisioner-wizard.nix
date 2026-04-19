@@ -185,7 +185,7 @@ Use a fresh appliance image for a new ceremony, or if this is an intentional lab
       fi
     }
 
-    usb_device_is_keyboard_or_hub_only() {
+    usb_device_is_kiosk_input_or_hub_only() {
       local device_path="$1"
       local interface_path=""
       local class=""
@@ -250,7 +250,7 @@ Use a fresh appliance image for a new ceremony, or if this is an intentional lab
         if [ "$allow_yubikeys" = "1" ] && [ "$vendor_id" = "1050" ]; then
           continue
         fi
-        if usb_device_is_keyboard_or_hub_only "$device_path"; then
+        if usb_device_is_kiosk_input_or_hub_only "$device_path"; then
           continue
         fi
 
@@ -399,7 +399,7 @@ Bus $(printf '%03d' "$busnum") Device $(printf '%03d' "$devnum"): $description (
 
           printf '%s\n' "# Remove all YubiKeys, USB keys, and other USB devices before continuing.
 
-The wizard will stay on this screen until only the keyboard remains attached.
+The wizard will stay on this screen until only approved kiosk input devices remain attached.
 
 Still detected:
 $remaining"

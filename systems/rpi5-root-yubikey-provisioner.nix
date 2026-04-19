@@ -83,13 +83,18 @@ in
     }
   ];
 
+  services.libinput.enable = true;
+
   services.xserver = {
     enable = true;
     videoDrivers = [ "modesetting" ];
     displayManager.lightdm.enable = true;
     displayManager.sessionCommands = ''
       ${pkgs.xorg.xsetroot}/bin/xsetroot -solid "#16202a"
-      ${pkgs.xorg.xset}/bin/xset s off -dpms
+      ${pkgs.xorg.xset}/bin/xset s 900 900
+      ${pkgs.xorg.xset}/bin/xset +dpms
+      ${pkgs.xorg.xset}/bin/xset dpms 900 900 900
+      ${pkgs.unclutter}/bin/unclutter -idle 0.1 -root &
       ${pdPkiPackages.pd-pki-root-yubikey-provisioner-wizard}/bin/pd-pki-root-yubikey-provisioner-wizard &
     '';
     windowManager.openbox.enable = true;

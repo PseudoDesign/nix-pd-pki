@@ -22,6 +22,9 @@ let
   usbGuardRules = ''
     allow id 1050:*
     allow with-interface one-of { 08:*:* }
+    # Allow generic HID kiosk inputs such as USB touchscreens without opening
+    # up boot-protocol mice.
+    allow with-interface one-of { 03:00:00 }
     allow with-interface one-of { 03:01:01 }
   '';
 in

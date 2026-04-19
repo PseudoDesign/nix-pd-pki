@@ -183,9 +183,10 @@ Operational defaults for this appliance:
   ceremony
 - disables SSH, NetworkManager, onboard Wi-Fi, and onboard Bluetooth
 - rejects USB devices by default with `usbguard`, allowing only YubiKeys,
-  USB mass-storage devices, and boot-keyboard-class HID interfaces
+  USB mass-storage devices, and kiosk-input HID interfaces such as generic USB
+  touchscreens
 - auto-logs a dedicated `pdpki` system session account into a lightweight graphical provisioning
-  wizard that clears the USB ports, generates fresh PIN / PUK / management
+  wizard with a hidden cursor and 15-minute inactivity screen blanking, then generates fresh PIN / PUK / management
   key material, reformats and exports two custodian secret-share bundles to
   separate flash drives, waits for a single inserted YubiKey, runs the reviewed
   `init-root-yubikey` dry-run and destructive apply flow, and leaves the

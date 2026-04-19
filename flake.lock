@@ -104,17 +104,18 @@
         ]
       },
       "locked": {
-        "lastModified": 1776545478,
-        "narHash": "sha256-EcnMgwFYQUbq6tIVrGBgLYfhh3VM0wUBMtOLPC7+f3Q=",
-        "owner": "PseudoDesign",
-        "repo": "pd-pki-python",
-        "rev": "56a4eaa522ca4ee50a477a24385aa98f916b91b8",
-        "type": "github"
+        "lastModified": 1776561810,
+        "narHash": "sha256-1Ptc12rBg6kLP9lsrWJAoWISZ6yqCD4tGIK3g6v5lv4=",
+        "ref": "workflow-update",
+        "rev": "88e0b5a7250b429e66ca312ca9dbc705908d65e9",
+        "revCount": 33,
+        "type": "git",
+        "url": "https://github.com/PseudoDesign/pd-pki-python.git"
       },
       "original": {
-        "owner": "PseudoDesign",
-        "repo": "pd-pki-python",
-        "type": "github"
+        "ref": "workflow-update",
+        "type": "git",
+        "url": "https://github.com/PseudoDesign/pd-pki-python.git"
       }
     },
     "root": {

@@ -8,7 +8,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     pd-pki-python = {
-      url = "github:PseudoDesign/pd-pki-python";
+      url = "git+https://github.com/PseudoDesign/pd-pki-python.git?ref=workflow-update";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -30,22 +30,7 @@
 
       nixosModules = import ./modules;
 
-      mkPdPkiPackage =
-        pkgs:
-        pd-pki-python.packages.${pkgs.stdenv.hostPlatform.system}.pd-pki.overrideAttrs
-          (old: {
-            patches = (old.patches or [ ]) ++ [
-              ./patches/pd-pki-python-locked-config-dom-bypass.patch
-              ./patches/pd-pki-python-kiosk-ui-tweaks.patch
-            ];
-            nativeInstallCheckInputs = (old.nativeInstallCheckInputs or [ ]) ++ [ pkgs.python312Packages.behave ];
-            postPatch = (old.postPatch or "") + ''
-              substituteInPlace src/pd_pki_workflow/api.py \
-                --replace-fail "HTTP_422_UNPROCESSABLE_CONTENT" "HTTP_422_UNPROCESSABLE_ENTITY"
-              substituteInPlace src/pd_pki_workflow/mock_api.py \
-                --replace-fail "HTTP_422_UNPROCESSABLE_CONTENT" "HTTP_422_UNPROCESSABLE_ENTITY"
-            '';
-          });
+      mkPdPkiPackage = pkgs: pd-pki-python.packages.${pkgs.stdenv.hostPlatform.system}.pd-pki;
 
       mkSpecialArgs = pkgs: {
         inherit nixos-raspberrypi pd-pki-python;

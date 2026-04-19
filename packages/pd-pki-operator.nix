@@ -467,6 +467,14 @@ pkgs.writeShellApplication {
       jq -r '.yubiKey.serial // empty' "$1/manifest.json" 2>/dev/null || true
     }
 
+    root_inventory_certificate_file() {
+      local inventory_dir="$1"
+
+      if [ -f "$inventory_dir/root-ca.cert.pem" ]; then
+        printf '%s' "$inventory_dir/root-ca.cert.pem"
+      fi
+    }
+
     root_policy_file_for_root_id() {
       local root_id="$1"
       local candidate=""
@@ -497,6 +505,25 @@ pkgs.writeShellApplication {
           printf '%s' "$candidate"
           return 0
         fi
+      fi
+
+      if [ -n "$fallback_path" ] && [ -f "$fallback_path" ]; then
+        printf '%s' "$fallback_path"
+        return 0
+      fi
+
+      return 1
+    }
+
+    resolve_root_certificate_file() {
+      local inventory_dir="$1"
+      local fallback_path="$2"
+      local candidate=""
+
+      candidate="$(root_inventory_certificate_file "$inventory_dir" || true)"
+      if [ -n "$candidate" ]; then
+        printf '%s' "$candidate"
+        return 0
       fi
 
       if [ -n "$fallback_path" ] && [ -f "$fallback_path" ]; then
@@ -2446,12 +2473,22 @@ $partition_path"
         return 0
       fi
 
-      issuer_cert="$(default_or_prompt_existing_file "Root certificate path" "''${ROOT_CERT_FILE:-$(issuer_default_cert_path root)}")" || return 0
       signer_state_dir="$(default_or_prompt_existing_dir "Root signer state directory" "''${ROOT_SIGNER_STATE_DIR:-$(issuer_default_signer_state_dir root)}")" || return 0
       root_inventory_root="''${ROOT_INVENTORY_ROOT:-/var/lib/pd-pki/inventory/root-ca}"
       root_inventory_dir="$(choose_root_inventory_dir "$root_inventory_root")" || return 0
       root_inventory_dir="$(cd "$root_inventory_dir" && pwd -P)"
       show_root_inventory_summary "$root_inventory_dir"
+      issuer_cert="$(resolve_root_certificate_file "$root_inventory_dir" "''${ROOT_CERT_FILE:-}" || true)"
+      if [ -z "$issuer_cert" ]; then
+        show_error "Missing Root Certificate" "No root certificate was found for the selected inventory entry.
+
+Expected committed certificate:
+$root_inventory_dir/root-ca.cert.pem
+
+Optional fallback path:
+''${ROOT_CERT_FILE:-<not configured>}"
+        return 1
+      fi
       policy_file="$(resolve_root_signer_policy_file "$root_inventory_dir" "''${ROOT_POLICY_FILE:-}" || true)"
       if [ -z "$policy_file" ]; then
         show_error "Missing Signer Policy" "No root signer policy file was found for the selected inventory entry.

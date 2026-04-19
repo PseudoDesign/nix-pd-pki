@@ -3,9 +3,8 @@ let
   ceremonyUser = "pdpki";
   ceremonyHome = "/var/lib/pd-pki";
   ceremonySecretsDirectory = "${ceremonyHome}/secrets";
-  rootPolicyRoot = "${ceremonyHome}/policy/root-ca";
-  rootInventoryRoot = "${ceremonyHome}/inventory/root-ca";
-  rootCertFile = "${ceremonyHome}/authorities/root/root-ca.cert.pem";
+  rootPolicyRoot = "/etc/pd-pki/policy/root-ca";
+  rootInventoryRoot = "/etc/pd-pki/inventory/root-ca";
   rootSignerStateDir = "${ceremonyHome}/signer-state/root";
   pdPkiPackages = import ../packages {
     inherit pkgs definitions;
@@ -26,10 +25,19 @@ in
       export PIN_FILE="$HOME/secrets/root-pin.txt"
       export ROOT_POLICY_ROOT=${lib.escapeShellArg rootPolicyRoot}
       export ROOT_INVENTORY_ROOT=${lib.escapeShellArg rootInventoryRoot}
-      export ROOT_CERT_FILE=${lib.escapeShellArg rootCertFile}
       export ROOT_SIGNER_STATE_DIR=${lib.escapeShellArg rootSignerStateDir}
     fi
   '';
+
+  environment.sessionVariables = {
+    PIN_FILE = "${ceremonyHome}/secrets/root-pin.txt";
+    ROOT_POLICY_ROOT = rootPolicyRoot;
+    ROOT_INVENTORY_ROOT = rootInventoryRoot;
+    ROOT_SIGNER_STATE_DIR = rootSignerStateDir;
+  };
+
+  environment.etc."pd-pki/inventory/root-ca".source = ../inventory/root-ca;
+  environment.etc."pd-pki/policy/root-ca".source = ../policy/root-ca;
 
   environment.etc."motd".text = ''
     Pseudo Design offline root CA intermediate signer
@@ -40,7 +48,6 @@ in
         optional: the graphical signer wizard prompts on-screen if this file is absent
       ROOT_POLICY_ROOT=${rootPolicyRoot}
       ROOT_INVENTORY_ROOT=${rootInventoryRoot}
-      ROOT_CERT_FILE=${rootCertFile}
       ROOT_SIGNER_STATE_DIR=${rootSignerStateDir}
 
     The appliance launches the graphical intermediate-signing wizard automatically on boot.

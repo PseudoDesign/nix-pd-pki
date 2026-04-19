@@ -29,7 +29,7 @@ pkgs.writeShellApplication {
     readonly policy_root="''${ROOT_POLICY_ROOT:-$session_home/policy/root-ca}"
     readonly policy_file_fallback_path="''${ROOT_POLICY_FILE:-}"
     readonly inventory_root="''${ROOT_INVENTORY_ROOT:-$session_home/inventory/root-ca}"
-    readonly root_cert_file="''${ROOT_CERT_FILE:-$session_home/authorities/root/root-ca.cert.pem}"
+    readonly root_cert_file_fallback_path="''${ROOT_CERT_FILE:-}"
     readonly root_signer_state_dir="''${ROOT_SIGNER_STATE_DIR:-$session_home/signer-state/root}"
     readonly pkcs11_module_path="${pkgs.yubico-piv-tool}/lib/libykcs11.so"
     readonly sudo_bin="/run/wrappers/bin/sudo"
@@ -619,6 +619,14 @@ EOF
       jq -r '.yubiKey.serial // empty' "$1/manifest.json" 2>/dev/null || true
     }
 
+    root_inventory_certificate_file() {
+      local inventory_dir="$1"
+
+      if [ -f "$inventory_dir/root-ca.cert.pem" ]; then
+        printf '%s' "$inventory_dir/root-ca.cert.pem"
+      fi
+    }
+
     root_policy_file_for_root_id() {
       local root_id="$1"
       local candidate=""
@@ -671,6 +679,25 @@ EOF
           printf '%s' "$candidate"
           return 0
         fi
+      fi
+
+      if [ -n "$fallback_path" ] && [ -f "$fallback_path" ]; then
+        printf '%s' "$fallback_path"
+        return 0
+      fi
+
+      return 1
+    }
+
+    resolve_root_certificate_file() {
+      local inventory_dir="$1"
+      local fallback_path="$2"
+      local candidate=""
+
+      candidate="$(root_inventory_certificate_file "$inventory_dir" || true)"
+      if [ -n "$candidate" ]; then
+        printf '%s' "$candidate"
+        return 0
       fi
 
       if [ -n "$fallback_path" ] && [ -f "$fallback_path" ]; then
@@ -1450,6 +1477,7 @@ Next steps:
       local root_inventory_dir=""
       local root_inventory_summary=""
       local policy_file_path=""
+      local active_root_cert_file=""
       local active_pin_file=""
       local yubikey_serial=""
       local verify_log=""
@@ -1482,11 +1510,6 @@ Next steps:
       [ -x "$sudo_bin" ] || {
         show_error "Missing Dependency" "Required sudo wrapper not found:
 $sudo_bin"
-        exit 1
-      }
-      [ -f "$root_cert_file" ] || {
-        show_error "Missing Root Certificate" "Root certificate not found:
-$root_cert_file"
         exit 1
       }
       [ -d "$root_signer_state_dir" ] || {
@@ -1614,6 +1637,18 @@ Optional fallback path:
         exit 1
       fi
 
+      active_root_cert_file="$(resolve_root_certificate_file "$root_inventory_dir" "$root_cert_file_fallback_path" || true)"
+      if [ -z "$active_root_cert_file" ]; then
+        show_error "Missing Root Certificate" "No root certificate was found for the selected inventory entry.
+
+Expected committed certificate:
+$root_inventory_dir/root-ca.cert.pem
+
+Optional fallback path:
+''${root_cert_file_fallback_path:-<not configured>}"
+        exit 1
+      fi
+
       yubikey_serial="$(wait_for_single_yubikey)"
       [ -n "$yubikey_serial" ] || {
         show_error "No YubiKey Detected" "The wizard could not determine a YubiKey serial."
@@ -1662,6 +1697,7 @@ Please wait and do not remove the token." \
 
 Request common name: $(request_bundle_common_name "$request_stage_dir")
 Root inventory: $(root_inventory_bundle_root_id "$root_inventory_dir")
+Root certificate: $active_root_cert_file
 Signer policy: $policy_file_path
 YubiKey serial: $yubikey_serial
 Approved by: $approved_by
@@ -1684,7 +1720,7 @@ If the YubiKey flashes, touch it to authorize the signing operation." \
           --issuer-key-uri "$issuer_key_uri" \
           --pkcs11-module "$pkcs11_module_path" \
           --pkcs11-pin-file "$active_pin_file" \
-          --issuer-cert "$root_cert_file" \
+          --issuer-cert "$active_root_cert_file" \
           --signer-state-dir "$root_signer_state_dir" \
           --policy-file "$policy_file_path" \
           --approved-by "$approved_by"; then

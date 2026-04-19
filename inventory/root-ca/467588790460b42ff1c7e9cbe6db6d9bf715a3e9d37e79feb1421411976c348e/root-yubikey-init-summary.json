@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "command": "init-root-yubikey",
+  "completedAt": "2026-04-19T03:06:26Z",
+  "yubikeySerial": "35454690",
+  "forceResetApplied": 1,
+  "slot": "9c",
+  "routineKeyUri": "pkcs11:model=YubiKey%20YK5;manufacturer=Yubico%20%28www.yubico.com%29;serial=35454690;token=YubiKey%20PIV%20%2335454690;id=%02;object=Private%20key%20for%20Digital%20Signature;type=private",
+  "profilePath": "/etc/pd-pki/root-yubikey-init-profile.json",
+  "reviewedPlan": {
+    "path": "/var/lib/pd-pki/root-yubikey-provisioning/root-35454690-20260419T030152Z/root-yubikey-init-plan.json",
+    "sha256": "d440186b81e0cb281b35988a5c9bec6afc0713c3a1ef2bbdb521ff8ccdfe197b"
+  },
+  "certificateInstallPath": "/var/lib/pd-pki/authorities/root/root-ca.cert.pem",
+  "archiveDirectory": "/var/lib/pd-pki/yubikey-inventory/root-35454690-20260419T030152Z",
+  "certificate": {
+    "subject": "CN=Pseudo Design Runtime Root CA",
+    "serial": "47722B9349B23E2E149D79AD7F4099E5C8585317",
+    "sha256Fingerprint": "46:75:88:79:04:60:B4:2F:F1:C7:E9:CB:E6:DB:6D:9B:F7:15:A3:E9:D3:7E:79:FE:B1:42:14:11:97:6C:34:8E",
+    "notBefore": "Apr 19 03:06:18 2026 GMT",
+    "notAfter": "Apr 16 03:06:18 2036 GMT"
+  },
+  "attestation": {
+    "sha256Fingerprint": "21:BA:D7:6A:BA:D0:CC:07:8B:30:54:34:92:47:6D:1F:B3:90:A8:B5:8A:66:55:F3:A1:B4:9C:85:01:7E:36:86"
+  }
+}

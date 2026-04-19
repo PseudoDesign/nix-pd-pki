@@ -54,6 +54,20 @@ pd-pki-signing-tools normalize-root-inventory \
   --inventory-root ./inventory/root-ca
 ```
 
+From the repository root, the helper script can automate that mounted-media
+workflow, print root certificate metadata, and stage the resulting inventory
+directory in git:
+
+```bash
+nix run .#pd-pki-normalize-root-inventory-from-mount -- ./mnt
+```
+
+To also print the copied file list and git status, add `-v`:
+
+```bash
+nix run .#pd-pki-normalize-root-inventory-from-mount -- -v ./mnt
+```
+
 On the signing appliance, `pd-pki-signing-tools verify-root-yubikey-identity`
 can verify that the inserted token presents the committed root CA identity
 before an intermediate signing ceremony begins:

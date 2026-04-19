@@ -1,0 +1,9 @@
+{
+  "profile": "root-ca-yubikey-initialized",
+  "serial": "47722B9349B23E2E149D79AD7F4099E5C8585317",
+  "subject": "CN=Pseudo Design Runtime Root CA",
+  "issuer": "CN=Pseudo Design Runtime Root CA",
+  "notBefore": "Apr 19 03:06:18 2026 GMT",
+  "notAfter": "Apr 16 03:06:18 2036 GMT",
+  "sha256Fingerprint": "46:75:88:79:04:60:B4:2F:F1:C7:E9:CB:E6:DB:6D:9B:F7:15:A3:E9:D3:7E:79:FE:B1:42:14:11:97:6C:34:8E"
+}

@@ -59,6 +59,28 @@ For the detailed root ceremony and signer procedures, see:
 - [docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md](docs/sops/ROOT_CA_YUBIKEY_INITIALIZATION_SOP.md)
 - [docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md](docs/sops/ROOT_CA_INTERMEDIATE_SIGNING_SOP.md)
 
+### Normalize the exported root artifacts into this repository
+
+After the wizard writes the public root-inventory bundle to removable media,
+move that flash drive to the development machine and mount it at `./mnt`.
+
+Run the helper from the repository root:
+
+```bash
+nix run .#pd-pki-normalize-root-inventory-from-mount -- ./mnt
+```
+
+The helper finds the newest bundle under
+`<mountpoint>/pd-pki-transfer/root-inventory/`, normalizes it into
+`inventory/root-ca/<root-id>/`, stages that directory with `git add`, and
+prints a short root certificate metadata summary.
+
+For the copied file list and git status too, use:
+
+```bash
+nix run .#pd-pki-normalize-root-inventory-from-mount -- -v ./mnt
+```
+
 ## Repository Usage
 
 ### Build exported contracts and tooling
@@ -67,6 +89,7 @@ For the detailed root ceremony and signer procedures, see:
 nix build .#pd-pki
 nix build .#pd-pki-signing-tools
 nix build .#pd-pki-operator
+nix build .#pd-pki-normalize-root-inventory-from-mount
 ```
 
 ### Build role and step packages
@@ -314,6 +337,8 @@ Key files:
   defines the external signer, signer-state, and CRL tooling
 - [`packages/pd-pki-operator.nix`](packages/pd-pki-operator.nix)
   defines the interactive removable-media operator wizard
+- [`packages/pd-pki-normalize-root-inventory-from-mount.nix`](packages/pd-pki-normalize-root-inventory-from-mount.nix)
+  packages the mounted-media root-inventory normalization helper
 
 ## Further Reading
 

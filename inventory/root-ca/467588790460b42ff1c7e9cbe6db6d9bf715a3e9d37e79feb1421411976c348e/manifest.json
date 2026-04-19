@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "contractKind": "root-ca-inventory",
-  "rootId": "e90fba8c6a7155fe5b6ee9581420161b670c778aa632c0d9b713375edd7977fd",
+  "rootId": "467588790460b42ff1c7e9cbe6db6d9bf715a3e9d37e79feb1421411976c348e",
   "source": {
     "command": "init-root-yubikey",
     "profileKind": "root-yubikey-initialization"
@@ -14,18 +14,18 @@
   "certificate": {
     "path": "root-ca.cert.pem",
     "subject": "CN=Pseudo Design Runtime Root CA",
-    "serial": "7A5C1C3D6554B41FDED19D10164C02AD61B6CE02",
-    "sha256Fingerprint": "E9:0F:BA:8C:6A:71:55:FE:5B:6E:E9:58:14:20:16:1B:67:0C:77:8A:A6:32:C0:D9:B7:13:37:5E:DD:79:77:FD",
-    "notBefore": "Apr 15 01:28:24 2026 GMT",
-    "notAfter": "Apr 12 01:28:24 2036 GMT"
+    "serial": "47722B9349B23E2E149D79AD7F4099E5C8585317",
+    "sha256Fingerprint": "46:75:88:79:04:60:B4:2F:F1:C7:E9:CB:E6:DB:6D:9B:F7:15:A3:E9:D3:7E:79:FE:B1:42:14:11:97:6C:34:8E",
+    "notBefore": "Apr 19 03:06:18 2026 GMT",
+    "notAfter": "Apr 16 03:06:18 2036 GMT"
   },
   "verifiedPublicKey": {
     "path": "root-ca.pub.verified.pem",
-    "sha256": "7d12c3a5f55a1479d96dc5f3348001c3aca02cd85347fba1c53fea62919d07e6"
+    "sha256": "e490c01a032cbb1eb1f5eebbba7ffd9ab34856b31bf982a54361385de45e6756"
   },
   "attestation": {
     "path": "root-ca.attestation.cert.pem",
-    "sha256Fingerprint": "D7:25:1D:EA:99:4B:B5:AA:B1:D8:95:E2:58:A5:EC:84:B1:B2:19:04:8C:20:50:40:9B:24:4B:94:DF:32:60:44"
+    "sha256Fingerprint": "21:BA:D7:6A:BA:D0:CC:07:8B:30:54:34:92:47:6D:1F:B3:90:A8:B5:8A:66:55:F3:A1:B4:9C:85:01:7E:36:86"
   },
   "metadata": {
     "path": "root-ca.metadata.json",

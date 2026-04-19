@@ -31,6 +31,10 @@ let
     inherit pkgs;
   };
 
+  pdPkiNormalizeRootInventoryFromMount = import ./pd-pki-normalize-root-inventory-from-mount.nix {
+    inherit pkgs pdPkiSigningTools;
+  };
+
   pdPkiRootYubiKeyProvisionerWizard = import ./pd-pki-root-yubikey-provisioner-wizard.nix {
     inherit pkgs pdPkiSigningTools;
   };
@@ -61,6 +65,7 @@ let
     openvpn-client-leaf = openvpnClientLeaf;
     pd-pki-signing-tools = pdPkiSigningTools;
     pd-pki-operator = pdPkiOperator;
+    pd-pki-normalize-root-inventory-from-mount = pdPkiNormalizeRootInventoryFromMount;
     pd-pki-root-yubikey-provisioner-wizard = pdPkiRootYubiKeyProvisionerWizard;
   };
 

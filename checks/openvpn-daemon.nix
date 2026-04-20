@@ -268,8 +268,8 @@ if pkgs.stdenv.hostPlatform.isLinux then
           schemaVersion: 1,
           roles: {
             "intermediate-signing-authority": {
-              defaultDays: 1825,
-              maxDays: 1825,
+              defaultDays: 3650,
+              maxDays: 3650,
               allowedKeyAlgorithms: ["EC"],
               crlDistributionPoints: [
                 "https://pki.pseudo.test/root.crl"

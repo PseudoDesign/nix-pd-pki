@@ -44,17 +44,19 @@ Role-specific behavior:
   finally stages an imported intermediate certificate, chain, optional CRL, and
   optional metadata
 - `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus
-  `san-manifest.json`, then either derives a CSR from an operator-provided key
-  via `keySourcePath` or `keyCredentialPath`, stages an externally generated CSR
-  via `csrSourcePath` or `csrCredentialPath`, or reuses an already-seeded
-  runtime key and CSR, and finally stages an imported server certificate, chain,
-  issuer CRL, and optional metadata
+  `san-manifest.json` from the declarative `request.*` interface, then either
+  derives a CSR from an operator-provided key via `keySourcePath` or
+  `keyCredentialPath`, stages an externally generated CSR via `csrSourcePath`
+  or `csrCredentialPath`, or reuses an already-seeded runtime key and CSR, and
+  finally stages an imported server certificate, chain, issuer CRL, and
+  optional metadata
 - `services.pd-pki.roles.openvpnClientLeaf` writes `issuance-request.json` plus
-  `identity-manifest.json`, then either derives a CSR from an operator-provided
-  key via `keySourcePath` or `keyCredentialPath`, stages an externally generated
-  CSR via `csrSourcePath` or `csrCredentialPath`, or reuses an already-seeded
-  runtime key and CSR, and finally stages an imported client certificate, chain,
-  issuer CRL, and optional metadata
+  `identity-manifest.json` from the declarative `request.*` interface, then
+  either derives a CSR from an operator-provided key via `keySourcePath` or
+  `keyCredentialPath`, stages an externally generated CSR via `csrSourcePath`
+  or `csrCredentialPath`, or reuses an already-seeded runtime key and CSR, and
+  finally stages an imported client certificate, chain, issuer CRL, and
+  optional metadata
 
 ## Provisioning Inputs
 
@@ -109,6 +111,16 @@ change.
 
   services.pd-pki.roles.openvpnServerLeaf = {
     enable = true;
+    request = {
+      basename = "vpn-server";
+      commonName = "vpn.example.test";
+      extraSubjectAltNames = [
+        "DNS:openvpn.example.test"
+        "IP:127.0.0.1"
+      ];
+      requestedProfile = "serverAuth";
+      requestedDays = 825;
+    };
     refreshInterval = "5m";
     provisioningUnits = [ "vault-agent.service" ];
     reloadUnits = [ "openvpn-server.service" ];
@@ -120,6 +132,12 @@ change.
 
   services.pd-pki.roles.openvpnClientLeaf = {
     enable = true;
+    request = {
+      basename = "laptop-client";
+      commonName = "laptop-01.example.test";
+      requestedProfile = "clientAuth";
+      requestedDays = 825;
+    };
     csrSourcePath = "/run/secrets/openvpn/client.csr.pem";
     certificateSourcePath = "/var/lib/pd-pki/imports/client.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/client.chain.pem";
@@ -135,6 +153,15 @@ remains available as aliases to `ceremony.subject`, `ceremony.validityDays`,
 For compatibility, `services.pd-pki.roles.intermediateSigningAuthority.commonName`
 and `.pathLen` remain available as aliases to `request.commonName` and
 `request.pathLen`.
+
+For compatibility, `services.pd-pki.roles.openvpnServerLeaf.commonName`,
+`.subjectAltNames`, `services.pd-pki.roles.openvpnClientLeaf.commonName`, and
+`.subjectAltNames` remain available as aliases to the corresponding
+`request.commonName` and `request.subjectAltNames` options.
+
+If `request.subjectAltNames` is left unset for a leaf role, pd-pki derives it
+from `request.commonName` by prepending `DNS:<commonName>` and then appending
+`request.extraSubjectAltNames`.
 
 If `keySourcePath` or `keyCredentialPath` is set, `request.key.*` still
 describes the desired request shape, but the key-generation settings are not

@@ -181,6 +181,39 @@ let
     ];
   };
 
+  evaluatedLeafRequestAliasModule = pkgs.lib.evalModules {
+    specialArgs = { inherit pkgs; };
+    modules = [
+      baseModule
+      nixosModules.openvpn-server-leaf
+      nixosModules.openvpn-client-leaf
+      (enableRoleModule definitions.roleMap."openvpn-server-leaf")
+      (enableRoleModule definitions.roleMap."openvpn-client-leaf")
+      {
+        services.pd-pki.roles.openvpnServerLeaf = {
+          commonName = "vpn.alias.test";
+          request = {
+            basename = "vpn-alias";
+            requestedDays = 397;
+            extraSubjectAltNames = [
+              "DNS:gateway.alias.test"
+              "IP:127.0.0.1"
+            ];
+          };
+        };
+
+        services.pd-pki.roles.openvpnClientLeaf = {
+          commonName = "client.alias.test";
+          subjectAltNames = [
+            "DNS:client.alias.test"
+            "DNS:client.alt.alias.test"
+          ];
+          request.requestedDays = 30;
+        };
+      }
+    ];
+  };
+
   legacyRootAliasChecksPassed =
     let
       cfg = getAttrFromPath [
@@ -196,6 +229,36 @@ let
     && cfg.ceremony.outputs.archiveBaseDirectory == "/var/lib/pd-pki/legacy-yubikey-inventory"
     && cfg.yubiKeyProfile.subject == "/CN=Legacy Alias Root CA"
     && cfg.yubiKeyProfile.validityDays == 7300;
+
+  leafRequestAliasChecksPassed =
+    let
+      serverCfg = getAttrFromPath [
+        "services"
+        "pd-pki"
+        "roles"
+        "openvpnServerLeaf"
+      ] evaluatedLeafRequestAliasModule.config;
+      clientCfg = getAttrFromPath [
+        "services"
+        "pd-pki"
+        "roles"
+        "openvpnClientLeaf"
+      ] evaluatedLeafRequestAliasModule.config;
+    in
+    serverCfg.request.commonName == "vpn.alias.test"
+    && serverCfg.request.basename == "vpn-alias"
+    && serverCfg.request.requestedDays == 397
+    && serverCfg.request.subjectAltNames == [
+      "DNS:vpn.alias.test"
+      "DNS:gateway.alias.test"
+      "IP:127.0.0.1"
+    ]
+    && clientCfg.request.commonName == "client.alias.test"
+    && clientCfg.request.requestedDays == 30
+    && clientCfg.request.subjectAltNames == [
+      "DNS:client.alias.test"
+      "DNS:client.alt.alias.test"
+    ];
 
   defaultModuleChecksPassed =
     builtins.all
@@ -254,6 +317,14 @@ listToAttrs (
       value =
         assert legacyRootAliasChecksPassed;
         pkgs.runCommand "nixos-module-root-certificate-authority-legacy-aliases-check" { } ''
+          touch "$out"
+        '';
+    }
+    {
+      name = "nixos-module-openvpn-leaf-request-aliases";
+      value =
+        assert leafRequestAliasChecksPassed;
+        pkgs.runCommand "nixos-module-openvpn-leaf-request-aliases-check" { } ''
           touch "$out"
         '';
     }

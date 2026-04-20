@@ -265,6 +265,16 @@ externally provisioned request or import material:
 
   services.pd-pki.roles.openvpnServerLeaf = {
     enable = true;
+    request = {
+      basename = "vpn-server";
+      commonName = "vpn.example.test";
+      extraSubjectAltNames = [
+        "DNS:openvpn.example.test"
+        "IP:127.0.0.1"
+      ];
+      requestedProfile = "serverAuth";
+      requestedDays = 825;
+    };
     refreshInterval = "5m";
     provisioningUnits = [ "vault-agent.service" ];
     reloadUnits = [ "openvpn-server.service" ];
@@ -272,6 +282,13 @@ externally provisioned request or import material:
     certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
     chainSourcePath = "/var/lib/pd-pki/imports/server.chain.pem";
     crlSourcePath = "/var/lib/pd-pki/imports/intermediate.crl.pem";
+  };
+
+  services.pd-pki.roles.openvpnClientLeaf.request = {
+    basename = "laptop-client";
+    commonName = "laptop-01.example.test";
+    requestedProfile = "clientAuth";
+    requestedDays = 825;
   };
 }
 ```

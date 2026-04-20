@@ -160,6 +160,15 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.openvpnServerLeaf = {
             enable = true;
+            request = {
+              basename = "vpn-runtime-server";
+              commonName = "vpn.runtime.example.test";
+              extraSubjectAltNames = [
+                "DNS:openvpn.runtime.example.test"
+                "IP:127.0.0.1"
+              ];
+              requestedDays = 397;
+            };
             refreshInterval = "2s";
             keySourcePath = "${serverKeyFixture}/server.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/server.cert.pem";
@@ -243,7 +252,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         root_imported.succeed("test -f /var/lib/pd-pki/authorities/root/root-ca.metadata.json")
         root_imported.succeed("test -f /etc/pd-pki/root-yubikey-init-profile.json")
         root_imported.succeed("jq -r '.subject' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '/CN=Pseudo Design Runtime Root CA'")
-        root_imported.succeed("jq -r '.validityDays' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '3650'")
+        root_imported.succeed("jq -r '.validityDays' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '7300'")
         root_imported.succeed("jq -r '.slot' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx '9c'")
         root_imported.succeed("jq -r '.algorithm' /etc/pd-pki/root-yubikey-init-profile.json | grep -Fx 'ECCP384'")
         root_imported.succeed("test -f \"$(jq -r '.pkcs11ModulePath' /etc/pd-pki/root-yubikey-init-profile.json)\"")
@@ -284,6 +293,13 @@ if pkgs.stdenv.hostPlatform.isLinux then
         server.succeed("test \"$(stat -c %a /var/lib/pd-pki/openvpn-server-leaf/server.key.pem)\" = 600")
         server.succeed("case \"$(readlink -f /var/lib/pd-pki/openvpn-server-leaf/server.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
         server.succeed("openssl req -in /var/lib/pd-pki/openvpn-server-leaf/server.csr.pem -noout >/dev/null")
+        server.succeed("jq -r '.basename' /var/lib/pd-pki/openvpn-server-leaf/issuance-request.json | grep -Fx 'vpn-runtime-server'")
+        server.succeed("jq -r '.commonName' /var/lib/pd-pki/openvpn-server-leaf/issuance-request.json | grep -Fx 'vpn.runtime.example.test'")
+        server.succeed("jq -r '.requestedDays' /var/lib/pd-pki/openvpn-server-leaf/issuance-request.json | grep -Fx '397'")
+        server.succeed("jq -r '.csrFile' /var/lib/pd-pki/openvpn-server-leaf/issuance-request.json | grep -Fx 'vpn-runtime-server.csr.pem'")
+        server.succeed("jq -r '.sans[0]' /var/lib/pd-pki/openvpn-server-leaf/san-manifest.json | grep -Fx 'DNS:vpn.runtime.example.test'")
+        server.succeed("jq -r '.sans[1]' /var/lib/pd-pki/openvpn-server-leaf/san-manifest.json | grep -Fx 'DNS:openvpn.runtime.example.test'")
+        server.succeed("jq -r '.sans[2]' /var/lib/pd-pki/openvpn-server-leaf/san-manifest.json | grep -Fx 'IP:127.0.0.1'")
         server.succeed("test \"$(openssl pkey -in /var/lib/pd-pki/openvpn-server-leaf/server.key.pem -pubout -outform der | sha256sum | cut -d' ' -f1)\" = \"$(openssl pkey -in ${serverKeyFixture}/server.key.pem -pubout -outform der | sha256sum | cut -d' ' -f1)\"")
         server.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
         server.succeed("test ! -e /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem")
@@ -434,13 +450,13 @@ if pkgs.stdenv.hostPlatform.isLinux then
         pid_b=$!
         wait "$pid_a"
         wait "$pid_b"
-        cmp -s /tmp/server-signed-a/server.cert.pem /tmp/server-signed-b/server.cert.pem""")
+        cmp -s /tmp/server-signed-a/vpn-runtime-server.cert.pem /tmp/server-signed-b/vpn-runtime-server.cert.pem""")
         intermediate.succeed("test \"$(find /var/lib/pd-pki/signer-state/intermediate/requests -maxdepth 1 -name '*.json' | wc -l | tr -d '[:space:]')\" = 1")
         intermediate.succeed("test \"$(find /var/lib/pd-pki/signer-state/intermediate/issuances -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')\" = 1")
         intermediate.copy_from_vm("/tmp/server-signed-a")
         server.copy_from_host(str(Path(out_dir, "server-signed-a")), "/tmp/server-signed")
         server.succeed("mkdir -p /var/lib/pd-pki/imports")
-        server.succeed("cp /tmp/server-signed/server.cert.pem /var/lib/pd-pki/imports/server.cert.pem")
+        server.succeed("cp /tmp/server-signed/vpn-runtime-server.cert.pem /var/lib/pd-pki/imports/server.cert.pem")
         server.succeed("cp /tmp/server-signed/chain.pem /var/lib/pd-pki/imports/server.chain.pem")
         server.succeed("cp /tmp/server-signed/metadata.json /var/lib/pd-pki/imports/server.metadata.json")
         server.wait_until_succeeds("test -f /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem")
@@ -452,7 +468,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         server.succeed("openssl x509 -in /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem -noout -text | grep -F 'Public-Key: (3072 bit)'")
         server.succeed("openssl x509 -in /var/lib/pd-pki/openvpn-server-leaf/server.cert.pem -noout -text | grep -F 'URI:https://pki.pseudo.test/intermediate.crl'")
         server.wait_until_succeeds("test \"$(cat /var/lib/pd-pki/openvpn-server-leaf/reload-observer.count)\" = 1")
-        server.succeed("jq -r '.subject' /var/lib/pd-pki/openvpn-server-leaf/certificate-metadata.json | grep -F 'vpn.pseudo.test'")
+        server.succeed("jq -r '.subject' /var/lib/pd-pki/openvpn-server-leaf/certificate-metadata.json | grep -F 'vpn.runtime.example.test'")
 
         client.succeed("pd-pki-signing-tools export-request --role openvpn-client-leaf --state-dir /var/lib/pd-pki/openvpn-client-leaf --out-dir /tmp/client-request")
         client.copy_from_vm("/tmp/client-request")

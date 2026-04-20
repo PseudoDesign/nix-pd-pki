@@ -7,7 +7,14 @@ let
     packagePath = ../packages/openvpn-server-leaf.nix;
   };
   cfg = config.services.pd-pki.roles.openvpnServerLeaf;
-  sanSpec = builtins.concatStringsSep "," cfg.subjectAltNames;
+  optionPath = [
+    "services"
+    "pd-pki"
+    "roles"
+    "openvpnServerLeaf"
+  ];
+  requestOptionPath = optionPath ++ [ "request" ];
+  sanSpec = builtins.concatStringsSep "," cfg.request.subjectAltNames;
   refreshInputs = builtins.filter (value: value != null) [
     cfg.keySourcePath
     cfg.keyCredentialPath
@@ -127,8 +134,8 @@ let
     chmod 700 "$state_dir"
 
     jq -n \
-      --arg commonName ${lib.escapeShellArg cfg.commonName} \
-      --argjson sans ${lib.escapeShellArg (builtins.toJSON cfg.subjectAltNames)} \
+      --arg commonName ${lib.escapeShellArg cfg.request.commonName} \
+      --argjson sans ${lib.escapeShellArg (builtins.toJSON cfg.request.subjectAltNames)} \
       '{
         commonName: $commonName,
         sans: $sans
@@ -139,12 +146,12 @@ let
       --arg schemaVersion "1" \
       --arg roleId "openvpn-server-leaf" \
       --arg requestKind "tls-leaf" \
-      --arg basename ${lib.escapeShellArg runtimeDefaults.server.basename} \
-      --arg commonName ${lib.escapeShellArg cfg.commonName} \
-      --argjson subjectAltNames ${lib.escapeShellArg (builtins.toJSON cfg.subjectAltNames)} \
-      --arg requestedProfile ${lib.escapeShellArg runtimeDefaults.server.profile} \
-      --arg requestedDays ${lib.escapeShellArg runtimeDefaults.server.days} \
-      --arg csrFile "$(basename "$csr_path")" \
+      --arg basename ${lib.escapeShellArg cfg.request.basename} \
+      --arg commonName ${lib.escapeShellArg cfg.request.commonName} \
+      --argjson subjectAltNames ${lib.escapeShellArg (builtins.toJSON cfg.request.subjectAltNames)} \
+      --arg requestedProfile ${lib.escapeShellArg cfg.request.requestedProfile} \
+      --arg requestedDays ${lib.escapeShellArg (toString cfg.request.requestedDays)} \
+      --arg csrFile ${lib.escapeShellArg "${cfg.request.basename}.csr.pem"} \
       '{
         schemaVersion: ($schemaVersion | tonumber),
         roleId: $roleId,
@@ -160,8 +167,8 @@ let
 
     request_workdir="$(mktemp -d)"
     request_material_dir="$request_workdir/server-request"
-    candidate_key_path="$request_material_dir/server.key.pem"
-    candidate_csr_path="$request_material_dir/server.csr.pem"
+    candidate_key_path="$request_material_dir/${cfg.request.basename}.key.pem"
+    candidate_csr_path="$request_material_dir/${cfg.request.basename}.csr.pem"
     request_generation_key_path=""
     csr_from_source=0
 
@@ -204,10 +211,10 @@ let
     if [ -n "$request_generation_key_path" ] && [ ! -f "$candidate_csr_path" ]; then
       generate_tls_request \
         "$request_material_dir" \
-        ${lib.escapeShellArg runtimeDefaults.server.basename} \
-        ${lib.escapeShellArg cfg.commonName} \
+        ${lib.escapeShellArg cfg.request.basename} \
+        ${lib.escapeShellArg cfg.request.commonName} \
         ${lib.escapeShellArg sanSpec} \
-        ${lib.escapeShellArg runtimeDefaults.server.profile} \
+        ${lib.escapeShellArg cfg.request.requestedProfile} \
         "$request_generation_key_path"
     elif [ ! -f "$candidate_csr_path" ]; then
       printf '%s\n' "Server runtime state is missing request material; provide keySourcePath, keyCredentialPath, csrSourcePath, csrCredentialPath, or seed the runtime state first" >&2
@@ -264,7 +271,11 @@ let
   '';
 in
 {
-  imports = [ roleModule ];
+  imports = [
+    roleModule
+    (lib.mkAliasOptionModule (optionPath ++ [ "commonName" ]) (requestOptionPath ++ [ "commonName" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "subjectAltNames" ]) (requestOptionPath ++ [ "subjectAltNames" ]))
+  ];
 
   options.services.pd-pki.roles.openvpnServerLeaf = {
     stateDir = lib.mkOption {
@@ -275,20 +286,68 @@ in
       '';
     };
 
-    commonName = lib.mkOption {
-      type = lib.types.str;
-      default = runtimeDefaults.server.commonName;
+    request = lib.mkOption {
+      default = { };
       description = ''
-        Common name to embed in the runtime OpenVPN server certificate.
+        Declarative OpenVPN server request contract. These settings define the exported request
+        bundle basename, certificate identity, requested profile, and requested lifetime that
+        pd-pki validates before importing a signed server certificate.
       '';
-    };
+      type = lib.types.submodule {
+        options = {
+          basename = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.server.basename;
+            description = ''
+              Public artifact label for the OpenVPN server request bundle. This controls the CSR
+              filename and signed certificate basename exchanged with the signer.
+            '';
+          };
 
-    subjectAltNames = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = runtimeDefaults.server.subjectAltNames;
-      description = ''
-        Subject alternative names to embed in the runtime OpenVPN server certificate.
-      '';
+          commonName = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.server.commonName;
+            description = ''
+              Common name requested for the OpenVPN server certificate.
+            '';
+          };
+
+          extraSubjectAltNames = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = runtimeDefaults.server.extraSubjectAltNames;
+            description = ''
+              Additional SAN entries appended to the default `DNS:<commonName>` SAN when
+              `subjectAltNames` is not explicitly set.
+            '';
+          };
+
+          subjectAltNames = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            default = [ "DNS:${cfg.request.commonName}" ] ++ cfg.request.extraSubjectAltNames;
+            description = ''
+              Subject alternative names requested for the OpenVPN server certificate. By default
+              pd-pki derives this from `commonName` and `extraSubjectAltNames`.
+            '';
+          };
+
+          requestedProfile = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.server.profile;
+            description = ''
+              Extended key usage profile requested from the signer for the server certificate.
+            '';
+          };
+
+          requestedDays = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = builtins.fromJSON runtimeDefaults.server.days;
+            description = ''
+              Requested certificate lifetime for the server certificate. Signer policy may shorten
+              or reject this request.
+            '';
+          };
+        };
+      };
     };
 
     generateRuntimeSecrets = lib.mkOption {

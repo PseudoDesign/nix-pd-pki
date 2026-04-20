@@ -16,12 +16,8 @@ in
   inherit baseStateDir;
 
   root = {
-    basename = "root-ca";
-    commonName = "Pseudo Design Runtime Root CA";
     subject = "/CN=Pseudo Design Runtime Root CA";
-    serial = "7001";
-    days = "3650";
-    pathLen = "1";
+    days = "7300";
     slot = "9c";
     algorithm = "ECCP384";
     pinPolicy = "always";
@@ -35,8 +31,7 @@ in
   intermediate = {
     basename = "intermediate-ca";
     commonName = "Pseudo Design Runtime Intermediate Signing Authority";
-    serial = "7101";
-    days = "1825";
+    days = "3650";
     pathLen = "0";
     stateDir = "${baseStateDir}/authorities/intermediate";
   };
@@ -44,12 +39,10 @@ in
   server = {
     basename = "server";
     commonName = "vpn.pseudo.test";
-    serial = "8101";
     days = "825";
     profile = "serverAuth";
     stateDir = "${baseStateDir}/openvpn-server-leaf";
-    subjectAltNames = [
-      "DNS:vpn.pseudo.test"
+    extraSubjectAltNames = [
       "DNS:openvpn.pseudo.test"
       "IP:127.0.0.1"
     ];
@@ -58,10 +51,9 @@ in
   client = {
     basename = "client";
     commonName = "client-01.pseudo.test";
-    serial = "8201";
     days = "825";
     profile = "clientAuth";
     stateDir = "${baseStateDir}/openvpn-client-leaf";
-    subjectAltNames = [ "DNS:client-01.pseudo.test" ];
+    extraSubjectAltNames = [ ];
   };
 }

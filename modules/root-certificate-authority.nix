@@ -7,20 +7,27 @@ let
     packagePath = ../packages/root-certificate-authority.nix;
   };
   cfg = config.services.pd-pki.roles.rootCertificateAuthority;
+  optionPath = [
+    "services"
+    "pd-pki"
+    "roles"
+    "rootCertificateAuthority"
+  ];
+  ceremonyOptionPath = optionPath ++ [ "ceremony" ];
   resolvedYubiKeyProfile = {
     schemaVersion = 1;
     profileKind = "root-yubikey-initialization";
     roleId = "root-certificate-authority";
-    subject = cfg.yubiKey.subject;
-    validityDays = cfg.yubiKey.validityDays;
-    slot = cfg.yubiKey.slot;
-    algorithm = cfg.yubiKey.algorithm;
-    pinPolicy = cfg.yubiKey.pinPolicy;
-    touchPolicy = cfg.yubiKey.touchPolicy;
-    pkcs11ModulePath = cfg.yubiKey.pkcs11ModulePath;
-    pkcs11ProviderDirectory = cfg.yubiKey.pkcs11ProviderDirectory;
-    certificateInstallPath = cfg.yubiKey.certificateInstallPath;
-    archiveBaseDirectory = cfg.yubiKey.archiveBaseDirectory;
+    subject = cfg.ceremony.subject;
+    validityDays = cfg.ceremony.validityDays;
+    slot = cfg.ceremony.key.slot;
+    algorithm = cfg.ceremony.key.algorithm;
+    pinPolicy = cfg.ceremony.key.pinPolicy;
+    touchPolicy = cfg.ceremony.key.touchPolicy;
+    pkcs11ModulePath = cfg.ceremony.pkcs11.modulePath;
+    pkcs11ProviderDirectory = cfg.ceremony.pkcs11.providerDirectory;
+    certificateInstallPath = cfg.ceremony.outputs.certificateInstallPath;
+    archiveBaseDirectory = cfg.ceremony.outputs.archiveBaseDirectory;
   };
   yubiKeyProfileFile = pkgs.writeText "pd-pki-root-yubikey-init-profile.json" (builtins.toJSON resolvedYubiKeyProfile);
   refreshInputs = builtins.filter (value: value != null) [
@@ -163,30 +170,48 @@ let
   '';
 in
 {
-  imports = [ roleModule ];
+  imports = [
+    roleModule
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "subject" ]) (ceremonyOptionPath ++ [ "subject" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "validityDays" ]) (ceremonyOptionPath ++ [ "validityDays" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "slot" ]) (ceremonyOptionPath ++ [ "key" "slot" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "algorithm" ]) (ceremonyOptionPath ++ [ "key" "algorithm" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "pinPolicy" ]) (ceremonyOptionPath ++ [ "key" "pinPolicy" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "touchPolicy" ]) (ceremonyOptionPath ++ [ "key" "touchPolicy" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "pkcs11ModulePath" ]) (ceremonyOptionPath ++ [ "pkcs11" "modulePath" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "pkcs11ProviderDirectory" ]) (ceremonyOptionPath ++ [ "pkcs11" "providerDirectory" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "certificateInstallPath" ]) (ceremonyOptionPath ++ [ "outputs" "certificateInstallPath" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "yubiKey" "archiveBaseDirectory" ]) (ceremonyOptionPath ++ [ "outputs" "archiveBaseDirectory" ]))
+  ];
 
   options.services.pd-pki.roles.rootCertificateAuthority = {
     stateDir = lib.mkOption {
       type = lib.types.str;
       default = runtimeDefaults.root.stateDir;
       description = ''
-        Mutable directory where the runtime root CA keypair and metadata live.
+        Authority state for the active root CA on this node. Changing it changes which root key,
+        CSR, trust anchor certificate, CRL, and provenance metadata pd-pki treats as
+        authoritative.
       '';
     };
 
-    yubiKey = lib.mkOption {
-      description = ''
-        Declarative, non-secret YubiKey initialization profile for the offline root CA ceremony.
-        The module exports this profile as machine-readable JSON for future operator tooling.
-      '';
+    ceremony = lib.mkOption {
       default = { };
+      description = ''
+        Declarative root self-signing ceremony contract for the offline YubiKey-backed trust
+        anchor. These settings define the root certificate identity, token-backed key behavior,
+        PKCS#11 access path, and where public ceremony artifacts are published after
+        initialization.
+      '';
       type = lib.types.submodule {
         options = {
           subject = lib.mkOption {
             type = lib.types.str;
             default = runtimeDefaults.root.subject;
             description = ''
-              Root subject in OpenSSL slash format for the YubiKey-backed root certificate.
+              Distinguished name for the self-signed root certificate in OpenSSL slash format.
+              This becomes the trust anchor identity embedded in every certificate chain issued
+              beneath the root.
             '';
           };
 
@@ -194,72 +219,115 @@ in
             type = lib.types.ints.positive;
             default = builtins.fromJSON runtimeDefaults.root.days;
             description = ''
-              Root certificate validity period in days for YubiKey initialization.
+              Requested lifetime of the self-signed root certificate. Longer lifetimes reduce root
+              rotation frequency but keep the same trust anchor active for longer across the fleet.
             '';
           };
 
-          slot = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.slot;
+          key = lib.mkOption {
+            default = { };
             description = ''
-              PIV slot to use for the root signing key during YubiKey initialization.
+              Characteristics of the YubiKey-backed root signing key and the operator controls
+              required to use it during future ceremonies.
             '';
+            type = lib.types.submodule {
+              options = {
+                slot = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.slot;
+                  description = ''
+                    PIV slot that becomes the canonical location of the root private key on the
+                    YubiKey. Future signing and verification workflows identify the root key by
+                    this slot.
+                  '';
+                };
+
+                algorithm = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.algorithm;
+                  description = ''
+                    YubiKey key algorithm requested for the root signing key. This determines the
+                    public key type and the signature digest family used for the self-signed root
+                    certificate.
+                  '';
+                };
+
+                pinPolicy = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.pinPolicy;
+                  description = ''
+                    PIN policy applied to the root signing key. This controls how often operators
+                    must authenticate before the root key may be used.
+                  '';
+                };
+
+                touchPolicy = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.touchPolicy;
+                  description = ''
+                    Touch policy applied to the root signing key. This determines whether a
+                    physical operator presence check is enforced when the root key signs.
+                  '';
+                };
+              };
+            };
           };
 
-          algorithm = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.algorithm;
+          pkcs11 = lib.mkOption {
+            default = { };
             description = ''
-              YubiKey PIV key algorithm to request when generating the root signing key.
+              PKCS#11 and OpenSSL provider plumbing used by offline root tooling to reach the
+              YubiKey-backed root signer.
             '';
+            type = lib.types.submodule {
+              options = {
+                modulePath = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.pkcs11ModulePath;
+                  description = ''
+                    PKCS#11 module used by ceremony tooling to discover and operate the YubiKey
+                    root signing key.
+                  '';
+                };
+
+                providerDirectory = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.pkcs11ProviderDirectory;
+                  description = ''
+                    OpenSSL provider directory that exposes the `pkcs11` provider needed for the
+                    root self-signing and verification toolchain.
+                  '';
+                };
+              };
+            };
           };
 
-          pinPolicy = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.pinPolicy;
+          outputs = lib.mkOption {
+            default = { };
             description = ''
-              PIN policy to set on the root signing key during YubiKey initialization.
+              Publication paths for the public root artifacts produced by the ceremony.
             '';
-          };
+            type = lib.types.submodule {
+              options = {
+                certificateInstallPath = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimePaths.certificate;
+                  description = ''
+                    Destination where the ceremony should install the public root certificate that
+                    this repo and downstream systems treat as the active trust anchor.
+                  '';
+                };
 
-          touchPolicy = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.touchPolicy;
-            description = ''
-              Touch policy to set on the root signing key during YubiKey initialization.
-            '';
-          };
-
-          pkcs11ModulePath = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.pkcs11ModulePath;
-            description = ''
-              PKCS#11 module path that the offline root tooling should use for the YubiKey token.
-            '';
-          };
-
-          pkcs11ProviderDirectory = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.pkcs11ProviderDirectory;
-            description = ''
-              OpenSSL provider directory that exposes the `pkcs11` OpenSSL provider for the offline root tooling.
-            '';
-          };
-
-          certificateInstallPath = lib.mkOption {
-            type = lib.types.str;
-            default = runtimePaths.certificate;
-            description = ''
-              Destination where the initialized root certificate should be installed for repo use.
-            '';
-          };
-
-          archiveBaseDirectory = lib.mkOption {
-            type = lib.types.str;
-            default = runtimeDefaults.root.archiveBaseDirectory;
-            description = ''
-              Base directory where public YubiKey initialization artifacts should be archived.
-            '';
+                archiveBaseDirectory = lib.mkOption {
+                  type = lib.types.str;
+                  default = runtimeDefaults.root.archiveBaseDirectory;
+                  description = ''
+                    Base directory where the ceremony archives the public root inventory and audit
+                    artifacts used for later verification and signing workflows.
+                  '';
+                };
+              };
+            };
           };
         };
       };
@@ -269,8 +337,8 @@ in
       type = lib.types.str;
       default = "pd-pki/root-yubikey-init-profile.json";
       description = ''
-        Relative path under `/etc` where the exported root YubiKey initialization profile JSON is
-        published.
+        Relative path under `/etc` where the exported machine-readable root ceremony profile JSON
+        is published for operator tooling.
       '';
     };
 
@@ -279,7 +347,7 @@ in
       readOnly = true;
       default = "/etc/${cfg.yubiKeyProfileEtcPath}";
       description = ''
-        Absolute path to the exported root YubiKey initialization profile JSON.
+        Absolute path to the exported root ceremony profile JSON.
       '';
     };
 
@@ -288,7 +356,7 @@ in
       readOnly = true;
       default = resolvedYubiKeyProfile;
       description = ''
-        Resolved machine-readable root YubiKey initialization profile derived from the NixOS
+        Resolved machine-readable root self-signing ceremony profile derived from the NixOS
         configuration.
       '';
     };
@@ -297,7 +365,8 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether to run the runtime initialization service for the root role.
+        Whether this node should actively maintain imported root CA state such as the live root
+        key, trust anchor certificate, CRL, and provenance metadata.
       '';
     };
 
@@ -305,8 +374,9 @@ in
       type = lib.types.nullOr lib.types.str;
       default = "5m";
       description = ''
-        How often to re-run runtime validation and staging when imported artifacts are expected.
-        Set to `null` to disable automatic refresh.
+        How quickly this node should reconcile externally provisioned root PKI material such as a
+        new root certificate, CSR, or CRL. Set to `null` when root updates should only be adopted
+        on explicit service runs.
       '';
     };
 
@@ -314,7 +384,8 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Optional systemd units to reload or restart after new validated root artifacts are staged.
+        Systemd units for PKI consumers that should react when the active root trust anchor or
+        root-issued CRL changes.
       '';
     };
 
@@ -326,7 +397,7 @@ in
       ];
       default = "reload-or-restart";
       description = ''
-        How to apply refreshes to units listed in `reloadUnits`.
+        How dependent PKI consumers should be nudged when the active root CA material changes.
       '';
     };
 
@@ -334,9 +405,8 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Optional systemd units to start and wait for before pd-pki validates and stages runtime
-        root artifacts. Use this to order pd-pki after external secret, CSR, or import
-        provisioning services.
+        External provisioning steps that establish root key material, certificate imports, or CRL
+        state before pd-pki decides what the current root CA state should be.
       '';
     };
 
@@ -344,7 +414,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an existing root private key to stage into the runtime state directory.
+        Root private key supplied from outside pd-pki. This defines the active trust-anchor key
+        material staged on the node.
       '';
     };
 
@@ -352,9 +423,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the root private key. Use
-        this instead of `keySourcePath` when the key should only be exposed to the pd-pki runtime
-        units.
+        Systemd credential carrying the root private key that defines the active trust-anchor key
+        material.
       '';
     };
 
@@ -362,8 +432,9 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an existing root certificate signing request to stage into the runtime
-        state directory.
+        Root CSR supplied from outside pd-pki. Use this when the root certificate request record
+        is generated or preserved by another system but should still be staged with the active root
+        state.
       '';
     };
 
@@ -371,7 +442,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the root CSR.
+        Systemd credential carrying an externally generated root CSR for audit or ceremony
+        continuity.
       '';
     };
 
@@ -379,7 +451,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an existing root certificate to stage into the runtime state directory.
+        Root certificate that should become the active trust anchor on this node.
       '';
     };
 
@@ -387,7 +459,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the root certificate.
+        Systemd credential carrying the root certificate that should become the active trust
+        anchor on this node.
       '';
     };
 
@@ -395,7 +468,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to a root-issued CRL to stage into the runtime state directory.
+        CRL issued by the root CA. This controls which root-issued certificates are treated as
+        revoked by systems that consume the root trust material.
       '';
     };
 
@@ -403,7 +477,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the root-issued CRL.
+        Systemd credential carrying the revocation state published by the root CA.
       '';
     };
 
@@ -411,7 +485,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to root metadata JSON to stage into the runtime state directory.
+        Non-secret metadata describing the active root certificate and its provenance. This is
+        useful for audit, inventory, and coordination with external PKI automation.
       '';
     };
 
@@ -419,7 +494,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing imported root metadata JSON.
+        Systemd credential carrying audit and provenance metadata for the active root
+        certificate.
       '';
     };
 
@@ -428,7 +504,8 @@ in
       readOnly = true;
       default = runtimePaths;
       description = ''
-        Runtime paths for the mutable root CA artifacts stored outside the Nix store.
+        Read-only map of where this node keeps the active root CA state. External PKI automation
+        can use these paths when handing root artifacts back to pd-pki.
       '';
     };
   };

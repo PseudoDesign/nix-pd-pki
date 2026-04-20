@@ -67,10 +67,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
           ];
           services.pd-pki.roles.rootCertificateAuthority = {
             enable = true;
-            yubiKey = {
+            ceremony = {
               subject = "/CN=Pseudo Design Configured Root CA";
               validityDays = 7300;
-              archiveBaseDirectory = "/var/lib/pd-pki/custom-yubikey-inventory";
+              outputs.archiveBaseDirectory = "/var/lib/pd-pki/custom-yubikey-inventory";
             };
           };
           system.stateVersion = lib.mkDefault "24.11";

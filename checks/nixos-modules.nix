@@ -165,6 +165,38 @@ let
     ];
   };
 
+  evaluatedLegacyRootAliasModule = pkgs.lib.evalModules {
+    specialArgs = { inherit pkgs; };
+    modules = [
+      baseModule
+      nixosModules.root-certificate-authority
+      (enableRoleModule definitions.roleMap."root-certificate-authority")
+      {
+        services.pd-pki.roles.rootCertificateAuthority.yubiKey.subject = "/CN=Legacy Alias Root CA";
+        services.pd-pki.roles.rootCertificateAuthority.yubiKey.validityDays = 7300;
+        services.pd-pki.roles.rootCertificateAuthority.yubiKey.slot = "9c";
+        services.pd-pki.roles.rootCertificateAuthority.yubiKey.archiveBaseDirectory =
+          "/var/lib/pd-pki/legacy-yubikey-inventory";
+      }
+    ];
+  };
+
+  legacyRootAliasChecksPassed =
+    let
+      cfg = getAttrFromPath [
+        "services"
+        "pd-pki"
+        "roles"
+        "rootCertificateAuthority"
+      ] evaluatedLegacyRootAliasModule.config;
+    in
+    cfg.ceremony.subject == "/CN=Legacy Alias Root CA"
+    && cfg.ceremony.validityDays == 7300
+    && cfg.ceremony.key.slot == "9c"
+    && cfg.ceremony.outputs.archiveBaseDirectory == "/var/lib/pd-pki/legacy-yubikey-inventory"
+    && cfg.yubiKeyProfile.subject == "/CN=Legacy Alias Root CA"
+    && cfg.yubiKeyProfile.validityDays == 7300;
+
   defaultModuleChecksPassed =
     builtins.all
       (role:
@@ -214,6 +246,14 @@ listToAttrs (
       value =
         assert defaultModuleChecksPassed;
         pkgs.runCommand "nixos-module-default-check" { } ''
+          touch "$out"
+        '';
+    }
+    {
+      name = "nixos-module-root-certificate-authority-legacy-aliases";
+      value =
+        assert legacyRootAliasChecksPassed;
+        pkgs.runCommand "nixos-module-root-certificate-authority-legacy-aliases-check" { } ''
           touch "$out"
         '';
     }

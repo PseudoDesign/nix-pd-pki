@@ -31,10 +31,11 @@ Each role follows the same high-level runtime pattern:
 
 Role-specific behavior:
 
-- `services.pd-pki.roles.rootCertificateAuthority` stages operator-provided root
-  key, CSR, certificate, optional CRL, and optional metadata into mutable
-  runtime paths, and exports a declarative non-secret YubiKey initialization
-  profile JSON under `/etc` for offline root ceremonies
+- `services.pd-pki.roles.rootCertificateAuthority` exports a declarative
+  `ceremony.*` contract for the offline YubiKey-backed self-signed root
+  ceremony, publishes the derived machine-readable profile JSON under `/etc`,
+  and stages operator-provided root key, CSR, certificate, optional CRL, and
+  optional metadata into mutable runtime paths
 - `services.pd-pki.roles.intermediateSigningAuthority` writes
   `signing-request.json` from the declarative `request.*` interface, then
   either derives a CSR from an operator-provided key via `keySourcePath` or
@@ -76,6 +77,21 @@ change.
 {
   imports = [ inputs.pd-pki.nixosModules.default ];
 
+  services.pd-pki.roles.rootCertificateAuthority = {
+    enable = true;
+    ceremony = {
+      subject = "/CN=Pseudo Design Fleet Root CA";
+      validityDays = 7300;
+      key = {
+        slot = "9c";
+        algorithm = "ECCP384";
+        pinPolicy = "always";
+        touchPolicy = "always";
+      };
+      outputs.archiveBaseDirectory = "/var/lib/pd-pki/yubikey-inventory";
+    };
+  };
+
   services.pd-pki.roles.intermediateSigningAuthority = {
     enable = true;
     request = {
@@ -111,6 +127,10 @@ change.
   };
 }
 ```
+
+For compatibility, `services.pd-pki.roles.rootCertificateAuthority.yubiKey.*`
+remains available as aliases to `ceremony.subject`, `ceremony.validityDays`,
+`ceremony.key.*`, `ceremony.pkcs11.*`, and `ceremony.outputs.*`.
 
 For compatibility, `services.pd-pki.roles.intermediateSigningAuthority.commonName`
 and `.pathLen` remain available as aliases to `request.commonName` and

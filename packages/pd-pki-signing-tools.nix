@@ -2431,6 +2431,7 @@ EOF
       local state_dir=""
       local out_dir=""
       local basename=""
+      local request_file=""
 
       while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -2458,29 +2459,37 @@ EOF
 
       require_dir "$state_dir"
       mkdir -p "$out_dir"
-      basename="$(certificate_basename_for_role "$role")"
 
       case "$role" in
         intermediate-signing-authority)
+          request_file="$state_dir/signing-request.json"
           require_file "$state_dir/intermediate-ca.csr.pem"
-          require_file "$state_dir/signing-request.json"
+          require_file "$request_file"
+          basename="$(jq -r '.basename // empty' "$request_file")"
+          [ -n "$basename" ] || basename="$(certificate_basename_for_role "$role")"
           cp "$state_dir/intermediate-ca.csr.pem" "$out_dir/$basename.csr.pem"
-          cp "$state_dir/signing-request.json" "$out_dir/request.json"
+          cp "$request_file" "$out_dir/request.json"
           ;;
         openvpn-server-leaf)
+          request_file="$state_dir/issuance-request.json"
           require_file "$state_dir/server.csr.pem"
-          require_file "$state_dir/issuance-request.json"
+          require_file "$request_file"
+          basename="$(jq -r '.basename // empty' "$request_file")"
+          [ -n "$basename" ] || basename="$(certificate_basename_for_role "$role")"
           cp "$state_dir/server.csr.pem" "$out_dir/$basename.csr.pem"
-          cp "$state_dir/issuance-request.json" "$out_dir/request.json"
+          cp "$request_file" "$out_dir/request.json"
           if [ -f "$state_dir/san-manifest.json" ]; then
             cp "$state_dir/san-manifest.json" "$out_dir/san-manifest.json"
           fi
           ;;
         openvpn-client-leaf)
+          request_file="$state_dir/issuance-request.json"
           require_file "$state_dir/client.csr.pem"
-          require_file "$state_dir/issuance-request.json"
+          require_file "$request_file"
+          basename="$(jq -r '.basename // empty' "$request_file")"
+          [ -n "$basename" ] || basename="$(certificate_basename_for_role "$role")"
           cp "$state_dir/client.csr.pem" "$out_dir/$basename.csr.pem"
-          cp "$state_dir/issuance-request.json" "$out_dir/request.json"
+          cp "$request_file" "$out_dir/request.json"
           if [ -f "$state_dir/identity-manifest.json" ]; then
             cp "$state_dir/identity-manifest.json" "$out_dir/identity-manifest.json"
           fi
@@ -2791,6 +2800,7 @@ EOF
       require_dir "$signed_dir"
 
       local basename
+      local request_file
       local csr_path
       local cert_source
       local chain_source
@@ -2800,7 +2810,13 @@ EOF
       local metadata_target
       local import_profile
 
-      basename="$(certificate_basename_for_role "$role")"
+      request_file="$signed_dir/request.json"
+      if [ -f "$request_file" ]; then
+        basename="$(jq -r '.basename // empty' "$request_file")"
+      fi
+      if [ -z "$basename" ]; then
+        basename="$(certificate_basename_for_role "$role")"
+      fi
       cert_source="$signed_dir/$basename.cert.pem"
       chain_source="$signed_dir/chain.pem"
       metadata_source="$signed_dir/metadata.json"

@@ -7,6 +7,18 @@ let
     packagePath = ../packages/intermediate-signing-authority.nix;
   };
   cfg = config.services.pd-pki.roles.intermediateSigningAuthority;
+  optionPath = [
+    "services"
+    "pd-pki"
+    "roles"
+    "intermediateSigningAuthority"
+  ];
+  requestOptionPath = optionPath ++ [ "request" ];
+  supportedRequestKeyAlgorithms = [
+    "rsa"
+    "ec-p256"
+    "ec-p384"
+  ];
   refreshInputs = builtins.filter (value: value != null) [
     cfg.keySourcePath
     cfg.keyCredentialPath
@@ -127,11 +139,11 @@ let
       --arg schemaVersion "1" \
       --arg roleId "intermediate-signing-authority" \
       --arg requestKind "intermediate-ca" \
-      --arg basename ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
-      --arg commonName ${lib.escapeShellArg cfg.commonName} \
-      --arg pathLen ${lib.escapeShellArg cfg.pathLen} \
-      --arg requestedDays ${lib.escapeShellArg runtimeDefaults.intermediate.days} \
-      --arg csrFile "$(basename "$csr_path")" \
+      --arg basename ${lib.escapeShellArg cfg.request.basename} \
+      --arg commonName ${lib.escapeShellArg cfg.request.commonName} \
+      --arg pathLen ${lib.escapeShellArg (toString cfg.request.pathLen)} \
+      --arg requestedDays ${lib.escapeShellArg (toString cfg.request.requestedDays)} \
+      --arg csrFile ${lib.escapeShellArg "${cfg.request.basename}.csr.pem"} \
       '{
         schemaVersion: ($schemaVersion | tonumber),
         roleId: $roleId,
@@ -191,9 +203,11 @@ let
       generate_ca_request \
         "$request_material_dir" \
         ${lib.escapeShellArg runtimeDefaults.intermediate.basename} \
-        ${lib.escapeShellArg cfg.commonName} \
-        ${lib.escapeShellArg cfg.pathLen} \
-        "$request_generation_key_path"
+        ${lib.escapeShellArg cfg.request.commonName} \
+        ${lib.escapeShellArg (toString cfg.request.pathLen)} \
+        "$request_generation_key_path" \
+        ${lib.escapeShellArg cfg.request.key.algorithm} \
+        ${lib.escapeShellArg (toString cfg.request.key.rsaBits)}
     elif [ ! -f "$candidate_csr_path" ]; then
       printf '%s\n' "Intermediate runtime state is missing request material; provide keySourcePath, keyCredentialPath, csrSourcePath, csrCredentialPath, or seed the runtime state first" >&2
       exit 1
@@ -249,38 +263,112 @@ let
   '';
 in
 {
-  imports = [ roleModule ];
+  imports = [
+    roleModule
+    (lib.mkAliasOptionModule (optionPath ++ [ "commonName" ]) (requestOptionPath ++ [ "commonName" ]))
+    (lib.mkAliasOptionModule (optionPath ++ [ "pathLen" ]) (requestOptionPath ++ [ "pathLen" ]))
+  ];
 
   options.services.pd-pki.roles.intermediateSigningAuthority = {
     stateDir = lib.mkOption {
       type = lib.types.str;
       default = runtimeDefaults.intermediate.stateDir;
       description = ''
-        Mutable directory where the runtime intermediate CA keypair and metadata live.
+        Authority state for this delegated CA. Changing it changes which intermediate identity,
+        pending signing request, imported certificate chain, and revocation material this node
+        treats as authoritative.
       '';
     };
 
-    commonName = lib.mkOption {
-      type = lib.types.str;
-      default = runtimeDefaults.intermediate.commonName;
+    request = lib.mkOption {
+      default = { };
       description = ''
-        Common name to embed in the runtime intermediate CA certificate signing request.
+        Declarative intermediate CA request contract. These settings define what this node asks
+        the root CA to sign and what subject, delegation depth, lifetime request, and key shape
+        pd-pki will enforce before accepting the resulting certificate.
       '';
-    };
+      type = lib.types.submodule {
+        options = {
+          basename = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.intermediate.basename;
+            description = ''
+              Public artifact label for the intermediate signing ceremony. This affects the names
+              used in exported request bundles and signed return bundles that external tooling and
+              operators exchange.
+            '';
+          };
 
-    pathLen = lib.mkOption {
-      type = lib.types.str;
-      default = runtimeDefaults.intermediate.pathLen;
-      description = ''
-        Path length constraint requested for the runtime intermediate CA certificate.
-      '';
+          commonName = lib.mkOption {
+            type = lib.types.str;
+            default = runtimeDefaults.intermediate.commonName;
+            description = ''
+              Subject common name requested for the intermediate CA. pd-pki enforces this against
+              the CSR presented to the root signer and against the imported intermediate
+              certificate that becomes active on the node.
+            '';
+          };
+
+          pathLen = lib.mkOption {
+            type = lib.types.ints.unsigned;
+            default = builtins.fromJSON runtimeDefaults.intermediate.pathLen;
+            description = ''
+              Delegation depth requested for this intermediate CA. `0` means the intermediate may
+              issue only end-entity certificates; larger values permit additional subordinate CA
+              layers beneath it.
+            '';
+          };
+
+          requestedDays = lib.mkOption {
+            type = lib.types.ints.positive;
+            default = builtins.fromJSON runtimeDefaults.intermediate.days;
+            description = ''
+              Requested certificate lifetime for the intermediate CA. This is carried to the root
+              signer as part of the request contract, though signer policy may shorten it or reject
+              it.
+            '';
+          };
+
+          key = lib.mkOption {
+            default = { };
+            description = ''
+              Cryptographic characteristics of the intermediate CA keypair when pd-pki is
+              responsible for generating the CSR locally.
+            '';
+            type = lib.types.submodule {
+              options = {
+                algorithm = lib.mkOption {
+                  type = lib.types.enum supportedRequestKeyAlgorithms;
+                  default = "ec-p384";
+                  description = ''
+                    Algorithm for a newly generated intermediate CA private key. This determines
+                    the CSR public key type that the root signer and signer policy will evaluate.
+                  '';
+                };
+
+                rsaBits = lib.mkOption {
+                  type = lib.types.ints.positive;
+                  default = 3072;
+                  description = ''
+                    RSA modulus size for a locally generated intermediate key. Larger values
+                    increase key strength but must still fit the root signer policy and ceremony
+                    requirements.
+                  '';
+                };
+              };
+            };
+          };
+        };
+      };
     };
 
     generateRuntimeSecrets = lib.mkOption {
       type = lib.types.bool;
       default = true;
       description = ''
-        Whether to run the runtime initialization service for the intermediate role.
+        Whether this node should actively maintain the intermediate CA request and imported
+        authority material. Disable this when another mechanism fully manages the intermediate CA
+        state outside pd-pki.
       '';
     };
 
@@ -288,8 +376,9 @@ in
       type = lib.types.nullOr lib.types.str;
       default = "5m";
       description = ''
-        How often to re-run runtime validation and staging when imported artifacts are expected.
-        Set to `null` to disable automatic refresh.
+        How quickly this node should reconcile externally provisioned PKI material such as a new
+        intermediate certificate, chain, or CRL. Set to `null` when PKI changes should only be
+        adopted on explicit service runs.
       '';
     };
 
@@ -297,7 +386,8 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Optional systemd units to reload or restart after new validated intermediate artifacts are staged.
+        Systemd units for PKI consumers that should react when this intermediate CA's active
+        certificate, trust chain, or CRL changes.
       '';
     };
 
@@ -309,7 +399,8 @@ in
       ];
       default = "reload-or-restart";
       description = ''
-        How to apply refreshes to units listed in `reloadUnits`.
+        How dependent PKI consumers should be nudged when the active intermediate CA material
+        changes.
       '';
     };
 
@@ -317,9 +408,9 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Optional systemd units to start and wait for before pd-pki validates and stages runtime
-        intermediate artifacts. Use this to order pd-pki after external secret, CSR, or signer
-        import provisioning services.
+        External provisioning steps that establish request inputs or signed authority material
+        before pd-pki decides what the current intermediate CA state should be. Use this to order
+        pd-pki after secret delivery, CSR generation, or signer-import workflows.
       '';
     };
 
@@ -327,8 +418,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an externally signed intermediate certificate to stage into the
-        runtime state directory.
+        Externally signed intermediate certificate that should become this node's active delegated
+        CA certificate.
       '';
     };
 
@@ -336,7 +427,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the intermediate certificate.
+        Systemd credential carrying the intermediate certificate that should become the node's
+        active delegated CA certificate.
       '';
     };
 
@@ -344,8 +436,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an externally managed intermediate private key to stage into the
-        runtime state directory before generating or validating the CSR.
+        Intermediate private key supplied from outside pd-pki. This determines the actual key
+        material behind the CSR and, after signing, the live delegated CA identity on the node.
       '';
     };
 
@@ -353,7 +445,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the intermediate private key.
+        Systemd credential carrying the intermediate private key that defines the live delegated CA
+        identity.
       '';
     };
 
@@ -361,10 +454,9 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an externally managed intermediate CSR to stage into the runtime
-        state directory. This supports deployments where the intermediate private key is
-        provisioned or held by another system and pd-pki should manage only the CSR, certificate
-        chain, and CRL imports.
+        Intermediate CSR supplied from outside pd-pki. Use this when key custody or CSR generation
+        happens elsewhere but pd-pki should still enforce the requested subject and CA constraints
+        before the request goes to the root signer.
       '';
     };
 
@@ -372,7 +464,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the intermediate CSR.
+        Systemd credential carrying an externally generated intermediate CSR for the root signing
+        ceremony.
       '';
     };
 
@@ -380,8 +473,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an intermediate certificate chain to stage into the runtime state
-        directory.
+        Certificate chain that anchors the active intermediate CA back to its issuer. This defines
+        the trust path that downstream consumers will use for intermediate-issued certificates.
       '';
     };
 
@@ -389,8 +482,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the intermediate certificate
-        chain.
+        Systemd credential carrying the trust chain that should accompany the active intermediate
+        CA certificate.
       '';
     };
 
@@ -398,8 +491,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to an intermediate-issued CRL to stage into the runtime state
-        directory.
+        CRL issued by this intermediate CA. This controls which previously issued certificates are
+        treated as revoked by systems that consume the intermediate's published trust material.
       '';
     };
 
@@ -407,7 +500,7 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing the intermediate-issued CRL.
+        Systemd credential carrying the revocation state published by this intermediate CA.
       '';
     };
 
@@ -415,7 +508,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to intermediate metadata JSON to stage into the runtime state directory.
+        Non-secret metadata describing the active intermediate certificate issuance. This is useful
+        for audit, provenance, and coordination with external PKI automation.
       '';
     };
 
@@ -423,8 +517,8 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = ''
-        Optional host path to load as a systemd credential containing imported intermediate
-        metadata JSON.
+        Systemd credential carrying audit and provenance metadata for the active intermediate
+        certificate.
       '';
     };
 
@@ -433,7 +527,9 @@ in
       readOnly = true;
       default = runtimePaths;
       description = ''
-        Runtime paths for the mutable intermediate CA artifacts stored outside the Nix store.
+        Read-only map of where this node keeps the active intermediate CA state. External PKI
+        automation can use these paths when it needs to hand signed authority material back to
+        pd-pki.
       '';
     };
   };

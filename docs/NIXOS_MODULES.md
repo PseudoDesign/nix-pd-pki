@@ -36,11 +36,12 @@ Role-specific behavior:
   runtime paths, and exports a declarative non-secret YubiKey initialization
   profile JSON under `/etc` for offline root ceremonies
 - `services.pd-pki.roles.intermediateSigningAuthority` writes
-  `signing-request.json`, then either derives a CSR from an operator-provided
-  key via `keySourcePath` or `keyCredentialPath`, stages an externally generated
-  CSR via `csrSourcePath` or `csrCredentialPath`, or reuses an already-seeded
-  runtime key and CSR, and finally stages an imported intermediate certificate,
-  chain, optional CRL, and optional metadata
+  `signing-request.json` from the declarative `request.*` interface, then
+  either derives a CSR from an operator-provided key via `keySourcePath` or
+  `keyCredentialPath`, stages an externally generated CSR via `csrSourcePath`
+  or `csrCredentialPath`, or reuses an already-seeded runtime key and CSR, and
+  finally stages an imported intermediate certificate, chain, optional CRL, and
+  optional metadata
 - `services.pd-pki.roles.openvpnServerLeaf` writes `issuance-request.json` plus
   `san-manifest.json`, then either derives a CSR from an operator-provided key
   via `keySourcePath` or `keyCredentialPath`, stages an externally generated CSR
@@ -75,6 +76,21 @@ change.
 {
   imports = [ inputs.pd-pki.nixosModules.default ];
 
+  services.pd-pki.roles.intermediateSigningAuthority = {
+    enable = true;
+    request = {
+      basename = "vpn-intermediate";
+      commonName = "Pseudo Design VPN Intermediate CA";
+      pathLen = 0;
+      requestedDays = 3650;
+      key = {
+        algorithm = "ec-p384";
+      };
+    };
+    certificateSourcePath = "/var/lib/pd-pki/imports/intermediate.cert.pem";
+    chainSourcePath = "/var/lib/pd-pki/imports/intermediate.chain.pem";
+  };
+
   services.pd-pki.roles.openvpnServerLeaf = {
     enable = true;
     refreshInterval = "5m";
@@ -95,6 +111,15 @@ change.
   };
 }
 ```
+
+For compatibility, `services.pd-pki.roles.intermediateSigningAuthority.commonName`
+and `.pathLen` remain available as aliases to `request.commonName` and
+`request.pathLen`.
+
+If `keySourcePath` or `keyCredentialPath` is set, `request.key.*` still
+describes the desired request shape, but the key-generation settings are not
+used because pd-pki reuses the supplied private key. `request.key.rsaBits`
+only matters when `request.key.algorithm = "rsa"`.
 
 ## Validation Behavior
 

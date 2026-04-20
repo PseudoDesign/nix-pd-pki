@@ -503,17 +503,17 @@ EOF
       state_dir="$workdir/intermediate-state"
       bundle_dir="$workdir/request-bundle"
 
-      generate_ca_request "$state_dir" "intermediate-ca" "Pseudo Design Runtime Intermediate Signing Authority" 0
+      generate_ca_request "$state_dir" "intermediate-ca" "Pseudo Design Runtime Intermediate Signing Authority" 0 "" ec-p384
 
       jq -n \
         --arg schemaVersion "1" \
         --arg roleId "intermediate-signing-authority" \
         --arg requestKind "intermediate-ca" \
-        --arg basename "intermediate-ca" \
+        --arg basename "delegated-intermediate" \
         --arg commonName "Pseudo Design Runtime Intermediate Signing Authority" \
         --arg pathLen "0" \
         --arg requestedDays "3650" \
-        --arg csrFile "intermediate-ca.csr.pem" \
+        --arg csrFile "delegated-intermediate.csr.pem" \
         '{
           schemaVersion: ($schemaVersion | tonumber),
           roleId: $roleId,
@@ -531,14 +531,15 @@ EOF
         --out-dir "$bundle_dir"
 
       test -f "$bundle_dir/request.json"
-      test -f "$bundle_dir/intermediate-ca.csr.pem"
+      test -f "$bundle_dir/delegated-intermediate.csr.pem"
       test ! -e "$bundle_dir/intermediate-ca.key.pem"
 
       jq -r '.roleId' "$bundle_dir/request.json" | grep -Fx 'intermediate-signing-authority'
       jq -r '.requestKind' "$bundle_dir/request.json" | grep -Fx 'intermediate-ca'
-      jq -r '.basename' "$bundle_dir/request.json" | grep -Fx 'intermediate-ca'
-      jq -r '.csrFile' "$bundle_dir/request.json" | grep -Fx 'intermediate-ca.csr.pem'
-      csr_common_name "$bundle_dir/intermediate-ca.csr.pem" | grep -Fx 'Pseudo Design Runtime Intermediate Signing Authority'
+      jq -r '.basename' "$bundle_dir/request.json" | grep -Fx 'delegated-intermediate'
+      jq -r '.csrFile' "$bundle_dir/request.json" | grep -Fx 'delegated-intermediate.csr.pem'
+      openssl req -in "$bundle_dir/delegated-intermediate.csr.pem" -noout -text | grep -F 'ASN1 OID: secp384r1'
+      csr_common_name "$bundle_dir/delegated-intermediate.csr.pem" | grep -Fx 'Pseudo Design Runtime Intermediate Signing Authority'
 
       printf '%s\n' "[e2e-root-intermediate-request-bundle-contract] intermediate request bundle contract check passed"
       touch "$out"
@@ -562,17 +563,17 @@ EOF
       signer_state_dir="$workdir/signer-state"
 
       generate_self_signed_ca "$root_dir" "root-ca" "Pseudo Design Workflow Root CA" 9001 7300 1 ec-p384
-      generate_ca_request "$request_dir" "intermediate-ca" "Pseudo Design Runtime Intermediate Signing Authority" 0
+      generate_ca_request "$request_dir" "delegated-intermediate" "Pseudo Design Runtime Intermediate Signing Authority" 0 "" ec-p384
 
       jq -n \
         --arg schemaVersion "1" \
         --arg roleId "intermediate-signing-authority" \
         --arg requestKind "intermediate-ca" \
-        --arg basename "intermediate-ca" \
+        --arg basename "delegated-intermediate" \
         --arg commonName "Pseudo Design Runtime Intermediate Signing Authority" \
         --arg pathLen "0" \
         --arg requestedDays "3650" \
-        --arg csrFile "intermediate-ca.csr.pem" \
+        --arg csrFile "delegated-intermediate.csr.pem" \
         '{
           schemaVersion: ($schemaVersion | tonumber),
           roleId: $roleId,
@@ -591,8 +592,7 @@ EOF
             "intermediate-signing-authority": {
               defaultDays: 3650,
               maxDays: 3650,
-              allowedKeyAlgorithms: ["RSA"],
-              minimumRsaBits: 3072,
+              allowedKeyAlgorithms: ["EC"],
               allowedPathLens: [0],
               commonNamePatterns: ["^[A-Za-z0-9 .-]+$"]
             }
@@ -610,13 +610,16 @@ EOF
         --approved-by workflow-root
 
       test -f "$signed_dir/request.json"
-      test -f "$signed_dir/intermediate-ca.cert.pem"
+      test -f "$signed_dir/delegated-intermediate.cert.pem"
       test -f "$signed_dir/chain.pem"
       test -f "$signed_dir/metadata.json"
 
+      openssl req -in "$request_dir/delegated-intermediate.csr.pem" -noout -text | grep -F 'ASN1 OID: secp384r1'
       jq -r '.profile' "$signed_dir/metadata.json" | grep -Fx 'intermediate-ca-signed'
       jq -r '.roleId' "$signed_dir/request.json" | grep -Fx 'intermediate-signing-authority'
-      openssl verify -CAfile "$signed_dir/chain.pem" "$signed_dir/intermediate-ca.cert.pem" >/dev/null
+      jq -r '.basename' "$signed_dir/request.json" | grep -Fx 'delegated-intermediate'
+      openssl x509 -in "$signed_dir/delegated-intermediate.cert.pem" -noout -text | grep -F 'ASN1 OID: secp384r1'
+      openssl verify -CAfile "$signed_dir/chain.pem" "$signed_dir/delegated-intermediate.cert.pem" >/dev/null
 
       test -f "$signer_state_dir/issuances/01/issuance.json"
       jq -r '.status' "$signer_state_dir/issuances/01/issuance.json" | grep -Fx 'issued'
@@ -646,17 +649,17 @@ EOF
       root_dir="$workdir/root"
 
       generate_self_signed_ca "$root_dir" "root-ca" "Pseudo Design Workflow Root CA" 9001 7300 1 ec-p384
-      generate_ca_request "$intermediate_state" "intermediate-ca" "Pseudo Design Runtime Intermediate Signing Authority" 0
+      generate_ca_request "$intermediate_state" "intermediate-ca" "Pseudo Design Runtime Intermediate Signing Authority" 0 "" ec-p384
 
       jq -n \
         --arg schemaVersion "1" \
         --arg roleId "intermediate-signing-authority" \
         --arg requestKind "intermediate-ca" \
-        --arg basename "intermediate-ca" \
+        --arg basename "delegated-intermediate" \
         --arg commonName "Pseudo Design Runtime Intermediate Signing Authority" \
         --arg pathLen "0" \
         --arg requestedDays "3650" \
-        --arg csrFile "intermediate-ca.csr.pem" \
+        --arg csrFile "delegated-intermediate.csr.pem" \
         '{
           schemaVersion: ($schemaVersion | tonumber),
           roleId: $roleId,
@@ -675,8 +678,7 @@ EOF
             "intermediate-signing-authority": {
               defaultDays: 3650,
               maxDays: 3650,
-              allowedKeyAlgorithms: ["RSA"],
-              minimumRsaBits: 3072,
+              allowedKeyAlgorithms: ["EC"],
               allowedPathLens: [0],
               commonNamePatterns: ["^[A-Za-z0-9 .-]+$"]
             }
@@ -694,7 +696,7 @@ EOF
       cp -R "$request_stage" "$request_bundle"
 
       test -f "$request_bundle/request.json"
-      test -f "$request_bundle/intermediate-ca.csr.pem"
+      test -f "$request_bundle/delegated-intermediate.csr.pem"
       test ! -e "$request_bundle/intermediate-ca.key.pem"
 
       pd-pki-signing-tools sign-request \
@@ -710,7 +712,7 @@ EOF
       mkdir -p "$(dirname "$signed_bundle")"
       cp -R "$signed_stage" "$signed_bundle"
 
-      test -f "$signed_bundle/intermediate-ca.cert.pem"
+      test -f "$signed_bundle/delegated-intermediate.cert.pem"
       test -f "$signed_bundle/chain.pem"
       test -f "$signed_bundle/metadata.json"
       test -f "$signed_bundle/request.json"

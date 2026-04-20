@@ -5,9 +5,8 @@
       "defaultDays": 1825,
       "maxDays": 1825,
       "allowedKeyAlgorithms": [
-        "RSA"
+        "EC"
       ],
-      "minimumRsaBits": 3072,
       "crlDistributionPoints": [
         "https://pki.pseudo.test/root.crl"
       ],

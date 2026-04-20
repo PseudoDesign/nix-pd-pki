@@ -19,7 +19,11 @@ let
   } ''
     set -euo pipefail
     mkdir -p "$out"
-    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$out/intermediate-ca.key.pem"
+    openssl genpkey \
+      -algorithm EC \
+      -pkeyopt ec_paramgen_curve:secp384r1 \
+      -pkeyopt ec_param_enc:named_curve \
+      -out "$out/intermediate-ca.key.pem"
   '';
 
   serverKeyFixture = pkgs.runCommand "pd-pki-server-openvpn-daemon-key-fixture" {
@@ -266,8 +270,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
             "intermediate-signing-authority": {
               defaultDays: 1825,
               maxDays: 1825,
-              allowedKeyAlgorithms: ["RSA"],
-              minimumRsaBits: 3072,
+              allowedKeyAlgorithms: ["EC"],
               crlDistributionPoints: [
                 "https://pki.pseudo.test/root.crl"
               ],

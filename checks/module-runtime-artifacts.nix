@@ -18,7 +18,11 @@ let
   } ''
     set -euo pipefail
     mkdir -p "$out"
-    openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$out/intermediate-ca.key.pem"
+    openssl genpkey \
+      -algorithm EC \
+      -pkeyopt ec_paramgen_curve:secp384r1 \
+      -pkeyopt ec_param_enc:named_curve \
+      -out "$out/intermediate-ca.key.pem"
   '';
   serverKeyFixture = pkgs.runCommand "pd-pki-server-runtime-key-fixture" {
     nativeBuildInputs = [ pkgs.openssl ];
@@ -119,6 +123,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
             enable = true;
             refreshInterval = "2s";
             provisioningUnits = [ "pd-pki-intermediate-provisioner.service" ];
+            request = {
+              basename = "delegated-intermediate";
+              requestedDays = 3650;
+            };
             keySourcePath = "/run/pd-pki-provisioning/intermediate-ca.key.pem";
             certificateSourcePath = "/var/lib/pd-pki/imports/intermediate.cert.pem";
             chainSourcePath = "/var/lib/pd-pki/imports/intermediate.chain.pem";
@@ -256,6 +264,10 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("test \"$(stat -c %a /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem)\" = 600")
         intermediate.succeed("case \"$(readlink -f /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem)\" in /nix/store/*) exit 1 ;; *) exit 0 ;; esac")
         intermediate.succeed("openssl req -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.csr.pem -noout >/dev/null")
+        intermediate.succeed("openssl req -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.csr.pem -noout -text | grep -F 'ASN1 OID: secp384r1'")
+        intermediate.succeed("jq -r '.basename' /var/lib/pd-pki/authorities/intermediate/signing-request.json | grep -Fx 'delegated-intermediate'")
+        intermediate.succeed("jq -r '.requestedDays' /var/lib/pd-pki/authorities/intermediate/signing-request.json | grep -Fx '3650'")
+        intermediate.succeed("jq -r '.csrFile' /var/lib/pd-pki/authorities/intermediate/signing-request.json | grep -Fx 'delegated-intermediate.csr.pem'")
         intermediate.succeed("test -f /run/pd-pki-provisioning/intermediate-ca.key.pem")
         intermediate.succeed("test \"$(openssl pkey -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.key.pem -pubout -outform der | sha256sum | cut -d' ' -f1)\" = \"$(openssl pkey -in ${intermediateKeyFixture}/intermediate-ca.key.pem -pubout -outform der | sha256sum | cut -d' ' -f1)\"")
         intermediate.succeed("test ! -e /var/lib/pd-pki/authorities/root/root-ca.key.pem")
@@ -295,10 +307,9 @@ if pkgs.stdenv.hostPlatform.isLinux then
           schemaVersion: 1,
           roles: {
             "intermediate-signing-authority": {
-              defaultDays: 1825,
-              maxDays: 1825,
-              allowedKeyAlgorithms: ["RSA"],
-              minimumRsaBits: 3072,
+              defaultDays: 3650,
+              maxDays: 3650,
+              allowedKeyAlgorithms: ["EC"],
               crlDistributionPoints: [
                 "https://pki.pseudo.test/root.crl"
               ],
@@ -360,7 +371,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         root_imported.copy_from_vm("/tmp/intermediate-signed")
         intermediate.copy_from_host(str(Path(out_dir, "intermediate-signed")), "/tmp/intermediate-signed")
         intermediate.succeed("mkdir -p /var/lib/pd-pki/imports")
-        intermediate.succeed("cp /tmp/intermediate-signed/intermediate-ca.cert.pem /var/lib/pd-pki/imports/intermediate.cert.pem")
+        intermediate.succeed("cp /tmp/intermediate-signed/delegated-intermediate.cert.pem /var/lib/pd-pki/imports/intermediate.cert.pem")
         intermediate.succeed("cp /tmp/intermediate-signed/chain.pem /var/lib/pd-pki/imports/intermediate.chain.pem")
         intermediate.succeed("cp /tmp/intermediate-signed/metadata.json /var/lib/pd-pki/imports/intermediate.metadata.json")
         intermediate.wait_until_succeeds("test -f /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem")
@@ -369,7 +380,7 @@ if pkgs.stdenv.hostPlatform.isLinux then
         intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/chain.pem")
         intermediate.succeed("test -f /var/lib/pd-pki/authorities/intermediate/signer-metadata.json")
         intermediate.succeed("openssl verify -CAfile /var/lib/pd-pki/authorities/intermediate/chain.pem /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem >/dev/null")
-        intermediate.succeed("openssl x509 -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem -noout -text | grep -F 'Public-Key: (3072 bit)'")
+        intermediate.succeed("openssl x509 -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem -noout -text | grep -F 'ASN1 OID: secp384r1'")
         intermediate.succeed("openssl x509 -in /var/lib/pd-pki/authorities/intermediate/intermediate-ca.cert.pem -noout -text | grep -F 'URI:https://pki.pseudo.test/root.crl'")
         intermediate.succeed("jq -r '.subject' /var/lib/pd-pki/authorities/intermediate/signer-metadata.json | grep -F 'Pseudo Design Runtime Intermediate Signing Authority'")
         root_imported.succeed("test -f /var/lib/pd-pki/signer-state/root/serials/next-serial")

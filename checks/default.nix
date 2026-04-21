@@ -52,11 +52,15 @@ let
         "cfg80211"
         "hci_uart"
       ];
-      expectedUsbGuardRules = ''
-        allow id 1050:*
-        allow with-interface one-of { 08:*:* }
-        allow with-interface one-of { 03:01:01 }
-      '';
+      expectedUsbGuardRules = [
+        "allow id 1050:*"
+        "allow with-interface one-of { 08:*:* }"
+        "allow with-interface one-of { 03:00:00 }"
+        "allow with-interface one-of { 03:01:01 }"
+      ];
+      actualUsbGuardRules = builtins.filter (line: line != "" && !(pkgs.lib.hasPrefix "#" line)) (
+        pkgs.lib.splitString "\n" cfg.services.usbguard.rules
+      );
       # Assert the image still disables the onboard radios and only admits the
       # USB device classes needed for the offline signing workflow.
       hardeningChecksPassed =
@@ -68,7 +72,7 @@ let
         && cfg.hardware.raspberry-pi.config.all.dt-overlays.disable-wifi.enable
         && cfg.services.usbguard.enable
         && cfg.services.usbguard.implicitPolicyTarget == "reject"
-        && cfg.services.usbguard.rules == expectedUsbGuardRules;
+        && actualUsbGuardRules == expectedUsbGuardRules;
     in
     assert hardeningChecksPassed;
     pkgs.runCommand "pd-pki-rpi5-root-ca-hardening-check" { } ''

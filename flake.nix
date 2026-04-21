@@ -14,7 +14,11 @@
       definitions = import ./packages/definitions.nix;
       nixosModules = import ./modules;
       moduleCheckNames =
-        [ "nixos-module-default" ]
+        [
+          "nixos-module-default"
+          "nixos-module-root-certificate-authority-legacy-aliases"
+          "nixos-module-openvpn-leaf-request-aliases"
+        ]
         ++ map (role: "nixos-module-${role.id}") definitions.roles;
       toolingCheckNames = [
         "signing-tools-pkcs11"

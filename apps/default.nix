@@ -102,6 +102,16 @@ let
         title = "Validate Default NixOS Module";
         description = "Evaluate the default pd-pki NixOS module and confirm it enables all role packages.";
       }
+      {
+        name = "nixos-module-root-certificate-authority-legacy-aliases";
+        title = "Validate Root Legacy Module Aliases";
+        description = "Evaluate the root CA NixOS module and confirm the legacy yubiKey alias options still resolve to the ceremony contract.";
+      }
+      {
+        name = "nixos-module-openvpn-leaf-request-aliases";
+        title = "Validate Leaf Request Aliases";
+        description = "Evaluate the OpenVPN leaf NixOS modules and confirm the legacy commonName and subjectAltNames aliases still resolve into request.* defaults and overrides.";
+      }
     ]
     ++ map (role: {
       name = "nixos-module-${role.id}";
